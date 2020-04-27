@@ -1,2 +1,4 @@
 # Add here internal Software Heritage dependencies, one per line.
-swh.core
+swh.core[http]
+swh.objstorage >= 0.0.43
+swh.journal >= 0.0.31

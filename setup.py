@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (C) 2019  The Software Heritage developers
+# Copyright (C) 2019-2020  The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
@@ -39,24 +39,24 @@ def parse_requirements(name=None):
 # Full sample:
 #   https://forge.softwareheritage.org/diffusion/DCORE/browse/master/setup.py
 setup(
-    name="swh.<module-name>",  # example: swh.loader.pypi
-    description="Software Heritage <Module's intent>",
+    name="swh.objstorage.replayer",  # example: swh.loader.pypi
+    description="Software Heritage content replayer",
     long_description=long_description,
     long_description_content_type="text/markdown",
     python_requires=">=3.7",
     author="Software Heritage developers",
     author_email="swh-devel@inria.fr",
-    url="https://forge.softwareheritage.org/diffusion/<module-git-code>",
+    url="https://forge.softwareheritage.org/diffusion/swh-objstorage-replayer",
     packages=find_packages(),  # packages's modules
     install_requires=parse_requirements() + parse_requirements("swh"),
     tests_require=parse_requirements("test"),
-    setup_requires=["vcversioner"],
+    setup_requires=["setuptools_scm"],
     extras_require={"testing": parse_requirements("test")},
-    vcversioner={},
+    use_scm_version=True,
     include_package_data=True,
     entry_points="""
         [swh.cli.subcommands]
-        <cli-name>=swh.<module>.cli:cli
+        content-replayer=swh.objstorage.replayer.cli:cli
     """,
     classifiers=[
         "Programming Language :: Python :: 3",
