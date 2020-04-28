@@ -6,9 +6,9 @@
 import functools
 
 from hypothesis import given, settings, HealthCheck
-from hypothesis.strategies import lists, sets, binary
+from hypothesis.strategies import lists, sets
 
-from swh.model.hypothesis_strategies import present_contents
+from swh.model.hypothesis_strategies import present_contents, sha1
 from swh.objstorage import get_objstorage
 from swh.objstorage.replayer.replay import (
     is_hash_in_bytearray,
@@ -17,12 +17,9 @@ from swh.objstorage.replayer.replay import (
 from swh.journal.tests.utils import MockedJournalClient, MockedKafkaWriter
 
 
-hash_strategy = binary(min_size=20, max_size=20)
-
-
 @settings(max_examples=500)
 @given(
-    sets(hash_strategy, min_size=0, max_size=500), sets(hash_strategy, min_size=10),
+    sets(sha1(), min_size=0, max_size=500), sets(sha1(), min_size=10),
 )
 def test_is_hash_in_bytearray(haystack, needles):
     array = b"".join(sorted(haystack))
