@@ -68,6 +68,6 @@ setup(
     project_urls={
         "Bug Reports": "https://forge.softwareheritage.org/maniphest",
         "Funding": "https://www.softwareheritage.org/donate",
-        "Source": "https://forge.softwareheritage.org/source/swh-<module>",
+        "Source": "https://forge.softwareheritage.org/source/swh-objstorage-replayer",
     },
 )
