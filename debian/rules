@@ -1,6 +1,6 @@
 #!/usr/bin/make -f
 
-export PYBUILD_NAME=<dot-separated-module-name>  # example: swh.loader.pypi
+export PYBUILD_NAME=swh.objstorage.replayer
 export PYBUILD_TEST_ARGS=--with-doctest -sva !db,!fs
 
 %:
@@ -9,3 +9,4 @@ export PYBUILD_TEST_ARGS=--with-doctest -sva !db,!fs
 override_dh_install:
 	dh_install
 	rm -v $(CURDIR)/debian/python3-*/usr/lib/python*/dist-packages/swh/__init__.py
+	rm -v $(CURDIR)/debian/python3-*/usr/lib/python*/dist-packages/swh/objstorage/__init__.py
