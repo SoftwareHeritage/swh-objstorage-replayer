@@ -1,5 +1,5 @@
-swh-py-template
-===============
+swh-objstorage-replayer
+=======================
 
-Python module template, used as skeleton to create new modules.
-
+Simple command line tool to replicate content objects from a source Object storage to a
+destination one by listening the `content` topic of a `swh.journal` kafka stream.
