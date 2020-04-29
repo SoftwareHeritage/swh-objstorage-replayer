@@ -1,5 +1,6 @@
-<module-name> (0.0.1-1) unstable; urgency=low
+swh-objstorage-replayer (0.1.0-1~swh1) unstable-swh; urgency=medium
 
-  *
+  * Initial release
+  * v0.1.0
 
- -- AUTHOR-NAME <AUTHOR-EMAIL>  <UTC-DATE>
+ -- David Douard <david.douard@sdfa3.org>  Wed, 29 Apr 2020 10:29:25 +0200
