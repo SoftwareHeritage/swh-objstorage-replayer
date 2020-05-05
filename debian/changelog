@@ -1,8 +1,20 @@
-swh-objstorage-replayer (0.1.0-1~swh1~bpo10+1) buster-swh; urgency=medium
+swh-objstorage-replayer (0.1.0-4~swh1) unstable-swh; urgency=medium
 
-  * Rebuild for buster-backports.
+  * Update PYBUILD_TEST_ARGS to a proper value
 
- -- David Douard <david.douard@sdfa3.org>  Wed, 29 Apr 2020 10:29:25 +0200
+ -- Nicolas Dandrimont <olasd@debian.org>  Tue, 05 May 2020 12:28:16 +0200
+
+swh-objstorage-replayer (0.1.0-3~swh1) unstable-swh; urgency=medium
+
+  * Correctly set dependencies in debian/control.
+
+ -- David Douard <david.douard@sdfa3.org>  Wed, 29 Apr 2020 16:34:48 +0200
+
+swh-objstorage-replayer (0.1.0-2~swh1) unstable-swh; urgency=medium
+
+  * Fix debian/rules and debian/control files.
+
+ -- David Douard <david.douard@sdfa3.org>  Wed, 29 Apr 2020 16:22:58 +0200
 
 swh-objstorage-replayer (0.1.0-1~swh1) unstable-swh; urgency=medium
 
