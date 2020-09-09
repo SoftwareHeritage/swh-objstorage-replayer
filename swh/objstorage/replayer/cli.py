@@ -16,8 +16,8 @@ except ImportError:
 
 from swh.model.model import SHA1_SIZE
 from swh.journal.client import get_journal_client
-from swh.objstorage import get_objstorage
 from swh.objstorage.cli import cli
+from swh.objstorage.factory import get_objstorage
 
 from swh.objstorage.replayer.replay import is_hash_in_bytearray
 from swh.objstorage.replayer.replay import process_replay_objects_content

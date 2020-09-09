@@ -210,7 +210,7 @@ def process_replay_objects_content(
 
     Example:
 
-    >>> from swh.objstorage import get_objstorage
+    >>> from swh.objstorage.factory import get_objstorage
     >>> src = get_objstorage('memory', {})
     >>> dst = get_objstorage('memory', {})
     >>> id1 = src.add(b'foo bar')
