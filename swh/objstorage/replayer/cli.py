@@ -3,9 +3,9 @@
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
 
-import functools
+# WARNING: do not import unnecessary things here to keep cli startup time under
+# control
 import logging
-import mmap
 
 import click
 
@@ -14,16 +14,10 @@ try:
 except ImportError:
     notify = None
 
-from swh.model.model import SHA1_SIZE
-from swh.journal.client import get_journal_client
-from swh.objstorage.cli import cli
-from swh.objstorage.factory import get_objstorage
-
-from swh.objstorage.replayer.replay import is_hash_in_bytearray
-from swh.objstorage.replayer.replay import process_replay_objects_content
+from swh.objstorage.cli import cli as objstorage_cli_group
 
 
-@cli.command("replay")
+@objstorage_cli_group.command("replay")
 @click.option(
     "--stop-after-objects",
     "-n",
@@ -68,6 +62,14 @@ def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst):
     ObjStorage before copying an object. You can turn that off if you know
     you're copying to an empty ObjStorage.
     """
+    import functools
+    import mmap
+    from swh.model.model import SHA1_SIZE
+    from swh.journal.client import get_journal_client
+    from swh.objstorage.factory import get_objstorage
+    from swh.objstorage.replayer.replay import is_hash_in_bytearray
+    from swh.objstorage.replayer.replay import process_replay_objects_content
+
     conf = ctx.obj["config"]
     try:
         objstorage_src = get_objstorage(**conf.pop("objstorage"))
@@ -126,7 +128,7 @@ def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst):
 
 def main():
     logging.basicConfig()
-    return cli(auto_envvar_prefix="SWH_OBJSTORAGE")
+    return objstorage_cli_group(auto_envvar_prefix="SWH_OBJSTORAGE")
 
 
 if __name__ == "__main__":

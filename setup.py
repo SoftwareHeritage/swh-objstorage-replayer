@@ -56,7 +56,7 @@ setup(
     include_package_data=True,
     entry_points="""
         [swh.cli.subcommands]
-        content-replayer=swh.objstorage.replayer.cli:cli
+        content-replayer=swh.objstorage.replayer.cli:objstorage_cli_group
     """,
     classifiers=[
         "Programming Language :: Python :: 3",
