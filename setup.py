@@ -56,7 +56,7 @@ setup(
     include_package_data=True,
     entry_points="""
         [swh.cli.subcommands]
-        content-replayer=swh.objstorage.replayer.cli:cli
+        content-replayer=swh.objstorage.replayer.cli:objstorage_cli_group
     """,
     classifiers=[
         "Programming Language :: Python :: 3",
@@ -68,6 +68,6 @@ setup(
     project_urls={
         "Bug Reports": "https://forge.softwareheritage.org/maniphest",
         "Funding": "https://www.softwareheritage.org/donate",
-        "Source": "https://forge.softwareheritage.org/source/swh-<module>",
+        "Source": "https://forge.softwareheritage.org/source/swh-objstorage-replayer",
     },
 )

@@ -21,7 +21,7 @@ import yaml
 from swh.journal.serializers import key_to_kafka
 from swh.model.hashutil import hash_to_hex
 from swh.objstorage.backends.in_memory import InMemoryObjStorage
-from swh.objstorage.replayer.cli import cli
+from swh.objstorage.replayer.cli import objstorage_cli_group
 from swh.objstorage.replayer.replay import CONTENT_REPLAY_RETRIES
 
 
@@ -51,7 +51,7 @@ def _patch_objstorages(names):
 
     def decorator(f):
         @functools.wraps(f)
-        @patch("swh.objstorage.replayer.cli.get_objstorage")
+        @patch("swh.objstorage.factory.get_objstorage")
         def newf(get_objstorage_mock, *args, **kwargs):
             get_objstorage_mock.side_effect = get_mock_objstorage
             f(*args, objstorages=objstorages, **kwargs)
@@ -71,7 +71,9 @@ def invoke(*args, env=None, journal_config=None):
         yaml.dump(config, config_fd)
         config_fd.seek(0)
         args = ["-C" + config_fd.name] + list(args)
-        return runner.invoke(cli, args, obj={"log_level": logging.DEBUG}, env=env,)
+        return runner.invoke(
+            objstorage_cli_group, args, obj={"log_level": logging.DEBUG}, env=env,
+        )
 
 
 def test_replay_help():
