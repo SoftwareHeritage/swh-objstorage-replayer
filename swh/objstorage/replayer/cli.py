@@ -64,11 +64,14 @@ def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst):
     """
     import functools
     import mmap
-    from swh.model.model import SHA1_SIZE
+
     from swh.journal.client import get_journal_client
+    from swh.model.model import SHA1_SIZE
     from swh.objstorage.factory import get_objstorage
-    from swh.objstorage.replayer.replay import is_hash_in_bytearray
-    from swh.objstorage.replayer.replay import process_replay_objects_content
+    from swh.objstorage.replayer.replay import (
+        is_hash_in_bytearray,
+        process_replay_objects_content,
+    )
 
     conf = ctx.obj["config"]
     try:
