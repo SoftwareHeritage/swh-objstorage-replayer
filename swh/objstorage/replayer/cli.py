@@ -14,7 +14,7 @@ try:
 except ImportError:
     notify = None
 
-from swh.objstorage.cli import cli as objstorage_cli_group
+from swh.objstorage.cli import objstorage_cli_group
 
 
 @objstorage_cli_group.command("replay")
