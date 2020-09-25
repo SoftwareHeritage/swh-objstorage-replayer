@@ -8,16 +8,15 @@ import functools
 from hypothesis import given, settings
 from hypothesis.strategies import sets
 
-from swh.model.model import Content
+from swh.journal.client import JournalClient
+from swh.journal.writer.kafka import KafkaJournalWriter
 from swh.model.hypothesis_strategies import sha1
+from swh.model.model import Content
 from swh.objstorage.factory import get_objstorage
 from swh.objstorage.replayer.replay import (
     is_hash_in_bytearray,
     process_replay_objects_content,
 )
-from swh.journal.writer.kafka import KafkaJournalWriter
-from swh.journal.client import JournalClient
-
 
 CONTENTS = [Content.from_data(f"foo{i}".encode()) for i in range(10)] + [
     Content.from_data(f"forbidden foo{i}".encode(), status="hidden") for i in range(10)

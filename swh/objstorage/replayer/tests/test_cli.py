@@ -8,8 +8,8 @@ import copy
 import functools
 import logging
 import re
-import tempfile
 from subprocess import Popen
+import tempfile
 from typing import Tuple
 from unittest.mock import patch
 
@@ -23,7 +23,6 @@ from swh.model.hashutil import hash_to_hex
 from swh.objstorage.backends.in_memory import InMemoryObjStorage
 from swh.objstorage.replayer.cli import objstorage_cli_group
 from swh.objstorage.replayer.replay import CONTENT_REPLAY_RETRIES
-
 
 logger = logging.getLogger(__name__)
 

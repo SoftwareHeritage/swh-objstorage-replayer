@@ -1,8 +1,10 @@
-swh-objstorage-replayer (0.1.1-1~swh1~bpo10+1) buster-swh; urgency=medium
+swh-objstorage-replayer (0.2.0-1~swh1) unstable-swh; urgency=medium
 
-  * Rebuild for buster-swh
+  * New upstream release 0.2.0     - (tagged by David Douard
+    <david.douard@sdfa3.org> on 2020-09-25 11:36:54 +0200)
+  * Upstream changes:     - v0.2.0
 
- -- Software Heritage autobuilder (on jenkins-debian1) <jenkins@jenkins-debian1.internal.softwareheritage.org>  Fri, 11 Sep 2020 14:23:26 +0000
+ -- Software Heritage autobuilder (on jenkins-debian1) <jenkins@jenkins-debian1.internal.softwareheritage.org>  Fri, 25 Sep 2020 09:39:31 +0000
 
 swh-objstorage-replayer (0.1.1-1~swh1) unstable-swh; urgency=medium
 
