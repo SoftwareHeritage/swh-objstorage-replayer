@@ -24,12 +24,7 @@ from tenacity import (
 from swh.core.statsd import statsd
 from swh.model.hashutil import hash_to_hex
 from swh.model.model import SHA1_SIZE
-
-from swh.objstorage.objstorage import (
-    ID_HASH_ALGO,
-    ObjNotFoundError,
-    ObjStorage,
-)
+from swh.objstorage.objstorage import ID_HASH_ALGO, ObjNotFoundError, ObjStorage
 
 logger = logging.getLogger(__name__)
 
