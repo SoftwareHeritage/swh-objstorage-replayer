@@ -1,6 +1,6 @@
-swh.core[http]
-swh.objstorage>=0.0.43
-swh.journal>=0.0.31
+swh.core[http]>=0.3
+swh.objstorage>=0.2.1
+swh.journal>=0.4.2
 
 [testing]
 pytest
