@@ -1,3 +1,13 @@
+swh-objstorage-replayer (0.2.1-1~swh1) unstable-swh; urgency=medium
+
+  * New upstream release 0.2.1     - (tagged by Nicolas Dandrimont
+    <nicolas@dandrimont.eu> on 2020-10-09 13:49:13 +0200)
+  * Upstream changes:     - Release swh.objstorage.replayer v0.2.1     -
+    Drop deprecated `args` argument in `get_objstorage` calls     -
+    Packaging and linting cleanups
+
+ -- Software Heritage autobuilder (on jenkins-debian1) <jenkins@jenkins-debian1.internal.softwareheritage.org>  Fri, 09 Oct 2020 11:51:51 +0000
+
 swh-objstorage-replayer (0.2.0-1~swh1) unstable-swh; urgency=medium
 
   * New upstream release 0.2.0     - (tagged by David Douard
