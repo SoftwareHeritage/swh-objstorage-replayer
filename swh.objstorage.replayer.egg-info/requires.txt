@@ -1,5 +1,5 @@
 swh.core[http]>=0.3
-swh.objstorage>=0.2.1
+swh.objstorage>=0.2.2
 swh.journal>=0.4.2
 
 [testing]
