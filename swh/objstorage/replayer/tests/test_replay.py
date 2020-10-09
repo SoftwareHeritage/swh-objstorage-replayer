@@ -37,8 +37,8 @@ def test_is_hash_in_bytearray(haystack, needles):
 
 
 def test_replay_content(kafka_server, kafka_prefix, kafka_consumer_group):
-    objstorage1 = get_objstorage(cls="memory", args={})
-    objstorage2 = get_objstorage(cls="memory", args={})
+    objstorage1 = get_objstorage(cls="memory")
+    objstorage2 = get_objstorage(cls="memory")
 
     writer = KafkaJournalWriter(
         brokers=[kafka_server],
