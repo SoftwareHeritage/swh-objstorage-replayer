@@ -100,11 +100,10 @@ def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst):
     else:
         exclude_fn = None
 
+    journal_cfg = conf["journal_client"]
+    journal_cfg.setdefault("cls", "kafka")
     client = get_journal_client(
-        "kafka",
-        **conf["journal_client"],
-        stop_after_objects=stop_after_objects,
-        object_types=("content",),
+        **journal_cfg, stop_after_objects=stop_after_objects, object_types=("content",),
     )
     worker_fn = functools.partial(
         process_replay_objects_content,
