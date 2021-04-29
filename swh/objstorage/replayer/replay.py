@@ -94,9 +94,16 @@ class ReplayError(Exception):
         return "ReplayError(doing %s, %s, %s)" % (self.operation, self.obj_id, self.exc)
 
 
-def log_replay_retry(retry_obj, sleep, last_result):
+def log_replay_retry(retry_state, sleep=None, last_result=None):
     """Log a retry of the content replayer"""
-    exc = last_result.exception()
+    try:
+        exc = retry_state.outcome.exception()
+        attempt_number = retry_state.attempt_number
+    except AttributeError:
+        # tenacity < 5.0
+        exc = last_result.exception()
+        attempt_number = retry_state.statistics["attempt_number"]
+
     logger.debug(
         "Retry operation %(operation)s on %(obj_id)s: %(exc)s",
         {"operation": exc.operation, "obj_id": exc.obj_id, "exc": str(exc.exc)},
@@ -104,16 +111,18 @@ def log_replay_retry(retry_obj, sleep, last_result):
 
     statsd.increment(
         CONTENT_RETRY_METRIC,
-        tags={
-            "operation": exc.operation,
-            "attempt": str(retry_obj.statistics["attempt_number"]),
-        },
+        tags={"operation": exc.operation, "attempt": str(attempt_number),},
     )
 
 
-def log_replay_error(last_attempt):
+def log_replay_error(retry_state):
     """Log a replay error to sentry"""
-    exc = last_attempt.exception()
+    try:
+        exc = retry_state.outcome.exception()
+    except AttributeError:
+        # tenacity < 5.0
+        exc = retry_state.exception()
+
     with push_scope() as scope:
         scope.set_tag("operation", exc.operation)
         scope.set_extra("obj_id", exc.obj_id)
@@ -126,7 +135,7 @@ def log_replay_error(last_attempt):
             "obj_id": exc.obj_id,
             "operation": exc.operation,
             "exc": str(exc.exc),
-            "retries": last_attempt.attempt_number,
+            "retries": retry_state.attempt_number,
         },
     )
 
