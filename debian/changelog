@@ -1,3 +1,11 @@
+swh-objstorage-replayer (0.2.2-1~swh1) unstable-swh; urgency=medium
+
+  * New upstream release 0.2.2     - (tagged by Antoine Lambert
+    <antoine.lambert@inria.fr> on 2021-04-29 14:33:40 +0200)
+  * Upstream changes:     - version 0.2.2
+
+ -- Software Heritage autobuilder (on jenkins-debian1) <jenkins@jenkins-debian1.internal.softwareheritage.org>  Thu, 29 Apr 2021 12:37:34 +0000
+
 swh-objstorage-replayer (0.2.1-1~swh1) unstable-swh; urgency=medium
 
   * New upstream release 0.2.1     - (tagged by Nicolas Dandrimont
