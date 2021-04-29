@@ -9,7 +9,7 @@ from hypothesis import given, settings
 from hypothesis.strategies import sets
 
 from swh.journal.client import JournalClient
-from swh.journal.writer.kafka import KafkaJournalWriter
+from swh.journal.writer import get_journal_writer
 from swh.model.hypothesis_strategies import sha1
 from swh.model.model import Content
 from swh.objstorage.factory import get_objstorage
@@ -40,7 +40,8 @@ def test_replay_content(kafka_server, kafka_prefix, kafka_consumer_group):
     objstorage1 = get_objstorage(cls="memory")
     objstorage2 = get_objstorage(cls="memory")
 
-    writer = KafkaJournalWriter(
+    writer = get_journal_writer(
+        cls="kafka",
         brokers=[kafka_server],
         client_id="kafka_writer",
         prefix=kafka_prefix,
