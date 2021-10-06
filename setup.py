@@ -46,7 +46,7 @@ setup(
     python_requires=">=3.7",
     author="Software Heritage developers",
     author_email="swh-devel@inria.fr",
-    url="https://forge.softwareheritage.org/diffusion/swh-objstorage-replayer",
+    url="https://forge.softwareheritage.org/source/swh-objstorage-replayer",
     packages=find_packages(),  # packages's modules
     install_requires=parse_requirements() + parse_requirements("swh"),
     tests_require=parse_requirements("test"),
