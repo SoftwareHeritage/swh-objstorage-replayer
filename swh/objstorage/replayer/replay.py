@@ -7,6 +7,7 @@ import logging
 from time import time
 from typing import Callable, Dict, List, Optional
 
+import msgpack
 from sentry_sdk import capture_exception, push_scope
 
 try:
@@ -28,6 +29,7 @@ from swh.model.model import SHA1_SIZE
 from swh.objstorage.objstorage import ID_HASH_ALGO, ObjNotFoundError, ObjStorage
 
 logger = logging.getLogger(__name__)
+REPORTER = None
 
 CONTENT_OPERATIONS_METRIC = "swh_content_replayer_operations_total"
 CONTENT_RETRY_METRIC = "swh_content_replayer_retries_total"
@@ -125,6 +127,12 @@ def log_replay_error(retry_state):
         " retries: %(exc)s",
         error_context,
     )
+
+    # if we have a global error (redis) reporter
+    if REPORTER is not None:
+        oid = f"blob:{exc.obj_id}"
+        msg = msgpack.dumps(error_context)
+        REPORTER(oid, msg)
 
     return None
 
