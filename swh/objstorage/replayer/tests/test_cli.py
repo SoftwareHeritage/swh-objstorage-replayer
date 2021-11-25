@@ -88,7 +88,7 @@ def test_replay_help():
 NUM_CONTENTS = 10
 
 
-def _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages):
+def _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorage):
     producer = Producer(
         {
             "bootstrap.servers": kafka_server,
@@ -100,7 +100,7 @@ def _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages):
     contents = {}
     for i in range(NUM_CONTENTS):
         content = b"\x00" * 19 + bytes([i])
-        sha1 = objstorages["src"].add(content)
+        sha1 = objstorage.add(content)
         contents[sha1] = content
         producer.produce(
             topic=kafka_prefix + ".content",
@@ -121,7 +121,9 @@ def test_replay_content(
     kafka_server: Tuple[Popen, int],
 ):
 
-    contents = _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages)
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
 
     result = invoke(
         "replay",
@@ -152,7 +154,9 @@ def test_replay_content_structured_log(
     caplog,
 ):
 
-    contents = _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages)
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
 
     caplog.set_level(logging.DEBUG, "swh.objstorage.replayer.replay")
 
@@ -192,7 +196,9 @@ def test_replay_content_static_group_id(
     caplog,
 ):
 
-    contents = _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages)
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
 
     # Setup log capture to fish the consumer settings out of the log messages
     caplog.set_level(logging.DEBUG, "swh.journal.client")
@@ -239,7 +245,9 @@ def test_replay_content_exclude(
     kafka_server: Tuple[Popen, int],
 ):
 
-    contents = _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages)
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
 
     excluded_contents = list(contents)[0::2]  # picking half of them
     with tempfile.NamedTemporaryFile(mode="w+b") as fd:
@@ -293,12 +301,13 @@ def test_replay_content_check_dst(
     caplog,
 ):
 
-    contents = _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages)
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
 
     for i, (sha1, content) in enumerate(contents.items()):
         if i >= NUM_CONTENTS_DST:
             break
-
         objstorages["dst"].add(content, obj_id=sha1)
 
     caplog.set_level(logging.DEBUG, "swh.objstorage.replayer.replay")
@@ -371,8 +380,9 @@ def test_replay_content_check_dst_retry(
     monkeypatch_retry_sleep,
 ):
 
-    contents = _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages)
-
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
     failures = {}
     for i, (sha1, content) in enumerate(contents.items()):
         if i >= NUM_CONTENTS_DST:
@@ -414,7 +424,9 @@ def test_replay_content_failed_copy_retry(
     monkeypatch_retry_sleep,
 ):
 
-    contents = _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages)
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
 
     add_failures = {}
     get_failures = {}
@@ -503,7 +515,9 @@ def test_replay_content_objnotfound(
     caplog,
 ):
 
-    contents = _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages)
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
 
     num_contents_deleted = 5
     contents_deleted = set()
