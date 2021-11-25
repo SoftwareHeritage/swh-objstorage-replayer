@@ -121,6 +121,7 @@ def test_replay_content(
     kafka_consumer_group: str,
     kafka_server: Tuple[Popen, int],
 ):
+    """Check the content replayer in normal conditions"""
 
     contents = _fill_objstorage_and_kafka(
         kafka_server, kafka_prefix, objstorages["src"]
@@ -154,6 +155,7 @@ def test_replay_content_structured_log(
     kafka_server: Tuple[Popen, int],
     caplog,
 ):
+    """Check the logs produced by the content replayer in normal conditions"""
 
     contents = _fill_objstorage_and_kafka(
         kafka_server, kafka_prefix, objstorages["src"]
@@ -196,6 +198,10 @@ def test_replay_content_static_group_id(
     kafka_server: Tuple[Popen, int],
     caplog,
 ):
+    """Check the content replayer in normal conditions
+
+    with KAFKA_GROUP_INSTANCE_ID set
+    """
 
     contents = _fill_objstorage_and_kafka(
         kafka_server, kafka_prefix, objstorages["src"]
@@ -245,6 +251,10 @@ def test_replay_content_exclude(
     kafka_consumer_group: str,
     kafka_server: Tuple[Popen, int],
 ):
+    """Check the content replayer in normal conditions
+
+    with a exclusion file (--exclude-sha1-file)
+    """
 
     contents = _fill_objstorage_and_kafka(
         kafka_server, kafka_prefix, objstorages["src"]
@@ -301,11 +311,19 @@ def test_replay_content_check_dst(
     expected_in_dst: int,
     caplog,
 ):
+    """Check the content replayer in normal conditions
+
+    with some objects already in the dst objstorage.
+
+    When check_dst is True, expect those not to be neither retrieved from the
+    src objstorage nor pushed in the dst objstorage.
+    """
 
     contents = _fill_objstorage_and_kafka(
         kafka_server, kafka_prefix, objstorages["src"]
     )
 
+    # add some objects in the dst objstorage
     for i, (sha1, content) in enumerate(contents.items()):
         if i >= NUM_CONTENTS_DST:
             break
@@ -352,6 +370,20 @@ def test_replay_content_check_dst(
 
 
 class FlakyObjStorage(InMemoryObjStorage):
+    """Flaky objstorage
+
+    Any 'get', 'add' or 'in' (i.e. '__contains__()') operation will fail
+    according to configured 'failures'.
+
+    'failures' is expected to be a dict which keys are couples (operation,
+    obj_id) and values are the number of time the operation 'operation' is
+    expected to fail for object 'obj_id' before being performed successfully.
+
+    An optional state ('state') can be also given as argument (see
+    InMemoryObjStorage).
+
+    """
+
     def __init__(self, *args, **kwargs):
         state = kwargs.pop("state")
         self.failures_left = Counter(kwargs.pop("failures"))
@@ -386,11 +418,16 @@ def test_replay_content_check_dst_retry(
     monkeypatch_retry_sleep,
     caplog,
 ):
+    """Check the content replayer with a flaky dst objstorage
 
+    for 'in' operations.
+    """
     contents = _fill_objstorage_and_kafka(
         kafka_server, kafka_prefix, objstorages["src"]
     )
 
+    # build a flaky dst objstorage in which the 'in' operation for the first
+    # NUM_CONTENT_DST objects will fail once
     failures = {}
     for i, (sha1, content) in enumerate(contents.items()):
         if i >= NUM_CONTENTS_DST:
@@ -441,7 +478,10 @@ def test_replay_content_failed_copy_retry(
     caplog,
     monkeypatch_retry_sleep,
 ):
+    """Check the content replayer with a flaky src and dst objstorages
 
+    for 'get' and 'add' operations.
+    """
     contents = _fill_objstorage_and_kafka(
         kafka_server, kafka_prefix, objstorages["src"]
     )
@@ -535,11 +575,13 @@ def test_replay_content_objnotfound(
     kafka_server: Tuple[Popen, int],
     caplog,
 ):
+    """Check the ContentNotFound is not considered a failure to retry"""
 
     contents = _fill_objstorage_and_kafka(
         kafka_server, kafka_prefix, objstorages["src"]
     )
 
+    # delete a few objects from the src objstorage
     num_contents_deleted = 5
     contents_deleted = set()
     for i, sha1 in enumerate(contents):
