@@ -80,6 +80,10 @@ def test_replay_statsd(kafka_server, kafka_prefix, kafka_consumer_group, statsd)
     # of each statsd message.
     prefix = "swh_content_replayer"
     expected_reports = {
+        # 4 because 2 for the copied objects + 2 for the in_dst ones
+        f"^{prefix}_retries_total:1[|]c[|]#attempt:1,operation:obj_in_objstorage$": 4,
+        f"^{prefix}_retries_total:1[|]c[|]#attempt:1,operation:get_object$": 2,
+        f"^{prefix}_retries_total:1[|]c[|]#attempt:1,operation:put_object$": 2,
         f"^{prefix}_duration_seconds:[0-9]+[.][0-9]+[|]ms[|]#request:get$": 2,
         f"^{prefix}_duration_seconds:[0-9]+[.][0-9]+[|]ms[|]#request:put$": 2,
         f"^{prefix}_bytes:4[|]c$": 2,
