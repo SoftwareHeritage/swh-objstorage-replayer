@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 from confluent_kafka import Producer
+import msgpack
 import pytest
 import yaml
 
@@ -35,9 +36,10 @@ CLI_CONFIG = {
 
 @pytest.fixture
 def monkeypatch_retry_sleep(monkeypatch):
-    from swh.objstorage.replayer.replay import copy_object, obj_in_objstorage
+    from swh.objstorage.replayer.replay import get_object, obj_in_objstorage, put_object
 
-    monkeypatch.setattr(copy_object.retry, "sleep", lambda x: None)
+    monkeypatch.setattr(get_object.retry, "sleep", lambda x: None)
+    monkeypatch.setattr(put_object.retry, "sleep", lambda x: None)
     monkeypatch.setattr(obj_in_objstorage.retry, "sleep", lambda x: None)
 
 
@@ -88,7 +90,7 @@ def test_replay_help():
 NUM_CONTENTS = 10
 
 
-def _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages):
+def _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorage):
     producer = Producer(
         {
             "bootstrap.servers": kafka_server,
@@ -100,7 +102,7 @@ def _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages):
     contents = {}
     for i in range(NUM_CONTENTS):
         content = b"\x00" * 19 + bytes([i])
-        sha1 = objstorages["src"].add(content)
+        sha1 = objstorage.add(content)
         contents[sha1] = content
         producer.produce(
             topic=kafka_prefix + ".content",
@@ -120,8 +122,11 @@ def test_replay_content(
     kafka_consumer_group: str,
     kafka_server: Tuple[Popen, int],
 ):
+    """Check the content replayer in normal conditions"""
 
-    contents = _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages)
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
 
     result = invoke(
         "replay",
@@ -151,8 +156,11 @@ def test_replay_content_structured_log(
     kafka_server: Tuple[Popen, int],
     caplog,
 ):
+    """Check the logs produced by the content replayer in normal conditions"""
 
-    contents = _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages)
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
 
     caplog.set_level(logging.DEBUG, "swh.objstorage.replayer.replay")
 
@@ -175,7 +183,7 @@ def test_replay_content_structured_log(
     copied = set()
     for record in caplog.records:
         logtext = record.getMessage()
-        if "copied" in logtext:
+        if "stored" in logtext:
             copied.add(record.args["obj_id"])
 
     assert (
@@ -191,8 +199,14 @@ def test_replay_content_static_group_id(
     kafka_server: Tuple[Popen, int],
     caplog,
 ):
+    """Check the content replayer in normal conditions
 
-    contents = _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages)
+    with KAFKA_GROUP_INSTANCE_ID set
+    """
+
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
 
     # Setup log capture to fish the consumer settings out of the log messages
     caplog.set_level(logging.DEBUG, "swh.journal.client")
@@ -238,8 +252,14 @@ def test_replay_content_exclude(
     kafka_consumer_group: str,
     kafka_server: Tuple[Popen, int],
 ):
+    """Check the content replayer in normal conditions
 
-    contents = _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages)
+    with a exclusion file (--exclude-sha1-file)
+    """
+
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
 
     excluded_contents = list(contents)[0::2]  # picking half of them
     with tempfile.NamedTemporaryFile(mode="w+b") as fd:
@@ -292,13 +312,22 @@ def test_replay_content_check_dst(
     expected_in_dst: int,
     caplog,
 ):
+    """Check the content replayer in normal conditions
 
-    contents = _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages)
+    with some objects already in the dst objstorage.
 
+    When check_dst is True, expect those not to be neither retrieved from the
+    src objstorage nor pushed in the dst objstorage.
+    """
+
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
+
+    # add some objects in the dst objstorage
     for i, (sha1, content) in enumerate(contents.items()):
         if i >= NUM_CONTENTS_DST:
             break
-
         objstorages["dst"].add(content, obj_id=sha1)
 
     caplog.set_level(logging.DEBUG, "swh.objstorage.replayer.replay")
@@ -318,17 +347,22 @@ def test_replay_content_check_dst(
     assert result.exit_code == 0, result.output
     assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
 
-    copied = 0
+    retrieved = 0
+    stored = 0
     in_dst = 0
     for record in caplog.records:
         logtext = record.getMessage()
-        if "copied" in logtext:
-            copied += 1
+        if "retrieved" in logtext:
+            retrieved += 1
+        elif "stored" in logtext:
+            stored += 1
         elif "in dst" in logtext:
             in_dst += 1
 
     assert (
-        copied == expected_copied and in_dst == expected_in_dst
+        retrieved == expected_copied
+        and stored == expected_copied
+        and in_dst == expected_in_dst
     ), "Unexpected amount of objects copied, see the captured log for details"
 
     for (sha1, content) in contents.items():
@@ -337,6 +371,20 @@ def test_replay_content_check_dst(
 
 
 class FlakyObjStorage(InMemoryObjStorage):
+    """Flaky objstorage
+
+    Any 'get', 'add' or 'in' (i.e. '__contains__()') operation will fail
+    according to configured 'failures'.
+
+    'failures' is expected to be a dict which keys are couples (operation,
+    obj_id) and values are the number of time the operation 'operation' is
+    expected to fail for object 'obj_id' before being performed successfully.
+
+    An optional state ('state') can be also given as argument (see
+    InMemoryObjStorage).
+
+    """
+
     def __init__(self, *args, **kwargs):
         state = kwargs.pop("state")
         self.failures_left = Counter(kwargs.pop("failures"))
@@ -369,36 +417,60 @@ def test_replay_content_check_dst_retry(
     kafka_consumer_group: str,
     kafka_server: Tuple[Popen, int],
     monkeypatch_retry_sleep,
+    caplog,
+    redis_proc,
+    redisdb,
 ):
+    """Check the content replayer with a flaky dst objstorage
 
-    contents = _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages)
+    for 'in' operations.
+    """
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
 
+    # build a flaky dst objstorage in which the 'in' operation for the first
+    # NUM_CONTENT_DST objects will fail once
     failures = {}
     for i, (sha1, content) in enumerate(contents.items()):
         if i >= NUM_CONTENTS_DST:
             break
-
         objstorages["dst"].add(content, obj_id=sha1)
         failures["in", sha1] = 1
-
     orig_dst = objstorages["dst"]
     objstorages["dst"] = FlakyObjStorage(state=orig_dst.state, failures=failures)
 
+    caplog.set_level(logging.DEBUG, "swh.objstorage.replayer.replay")
     result = invoke(
         "replay",
+        "--check-dst",
         "--stop-after-objects",
         str(NUM_CONTENTS),
-        "--check-dst",
         journal_config={
             "brokers": kafka_server,
             "group_id": kafka_consumer_group,
             "prefix": kafka_prefix,
+            "error_reporter": {"host": redis_proc.host, "port": redis_proc.port},
         },
     )
     expected = r"Done.\n"
     assert result.exit_code == 0, result.output
     assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
 
+    # check that exactly NUM_CONTENTS_DST 'in' operations have failed once
+    failed_in = 0
+    for record in caplog.records:
+        logtext = record.getMessage()
+        if "Retry operation obj_in_objstorage" in logtext:
+            failed_in += 1
+        elif "Retry operation" in logtext:
+            assert False, "No other failure expected than 'in' operations"
+    assert failed_in == NUM_CONTENTS_DST
+
+    # check nothing has been reported in redis
+    assert not redisdb.keys()
+
+    # in the end, the replay process should be OK
     for (sha1, content) in contents.items():
         assert sha1 in objstorages["dst"], sha1
         assert objstorages["dst"].get(sha1) == content
@@ -412,9 +484,18 @@ def test_replay_content_failed_copy_retry(
     kafka_server: Tuple[Popen, int],
     caplog,
     monkeypatch_retry_sleep,
+    redis_proc,
+    redisdb,
 ):
+    """Check the content replayer with a flaky src and dst objstorages
 
-    contents = _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages)
+    for 'get' and 'add' operations, and a few non-recoverable failures (some
+    objects failed to be replayed).
+
+    """
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
 
     add_failures = {}
     get_failures = {}
@@ -447,6 +528,9 @@ def test_replay_content_failed_copy_retry(
         if num_failures >= CONTENT_REPLAY_RETRIES:
             definitely_failed.add(hash_to_hex(sha1))
 
+    assert add_failures
+    assert get_failures
+    assert definitely_failed
     objstorages["dst"] = FlakyObjStorage(
         state=objstorages["dst"].state, failures=add_failures,
     )
@@ -464,27 +548,48 @@ def test_replay_content_failed_copy_retry(
             "brokers": kafka_server,
             "group_id": kafka_consumer_group,
             "prefix": kafka_prefix,
+            "error_reporter": {"host": redis_proc.host, "port": redis_proc.port},
         },
     )
     expected = r"Done.\n"
     assert result.exit_code == 0, result.output
     assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
 
+    # check the logs looks as expected
     copied = 0
-    actually_failed = set()
+    failed_put = set()
+    failed_get = set()
     for record in caplog.records:
         logtext = record.getMessage()
-        if "copied" in logtext:
+        if "stored" in logtext:
             copied += 1
         elif "Failed operation" in logtext:
             assert record.levelno == logging.ERROR
             assert record.args["retries"] == CONTENT_REPLAY_RETRIES
-            actually_failed.add(record.args["obj_id"])
-
+            assert record.args["operation"] in ("get_object", "put_object")
+            if record.args["operation"] == "get_object":
+                failed_get.add(record.args["obj_id"])
+            else:
+                failed_put.add(record.args["obj_id"])
     assert (
-        actually_failed == definitely_failed
+        failed_put | failed_get == definitely_failed
     ), "Unexpected object copy failures; see captured log for details"
 
+    # check failed objects are referenced in redis
+    assert set(redisdb.keys()) == {
+        f"blob:{objid}".encode() for objid in definitely_failed
+    }
+    # and have a consistent error report in redis
+    for key in redisdb.keys():
+        report = msgpack.loads(redisdb[key])
+        assert report["operation"] in ("get_object", "put_object")
+        if report["operation"] == "get_object":
+            assert report["obj_id"] in failed_get
+        else:
+            assert report["obj_id"] in failed_put
+
+    # check valid object are in the dst objstorage, but
+    # failed objects are not.
     for (sha1, content) in contents.items():
         if hash_to_hex(sha1) in definitely_failed:
             assert sha1 not in objstorages["dst"]
@@ -502,16 +607,18 @@ def test_replay_content_objnotfound(
     kafka_server: Tuple[Popen, int],
     caplog,
 ):
+    """Check the ContentNotFound is not considered a failure to retry"""
 
-    contents = _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorages)
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
 
+    # delete a few objects from the src objstorage
     num_contents_deleted = 5
     contents_deleted = set()
-
     for i, sha1 in enumerate(contents):
         if i >= num_contents_deleted:
             break
-
         del objstorages["src"].state[sha1]
         contents_deleted.add(hash_to_hex(sha1))
 
@@ -535,12 +642,14 @@ def test_replay_content_objnotfound(
     not_in_src = set()
     for record in caplog.records:
         logtext = record.getMessage()
-        if "copied" in logtext:
+        if "stored" in logtext:
             copied += 1
         elif "object not found" in logtext:
             # Check that the object id can be recovered from logs
             assert record.levelno == logging.ERROR
             not_in_src.add(record.args["obj_id"])
+        elif "Retry operation" in logtext:
+            assert False, "Not found objects should not be retried"
 
     assert (
         copied == NUM_CONTENTS - num_contents_deleted

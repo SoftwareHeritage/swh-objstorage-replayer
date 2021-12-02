@@ -7,6 +7,7 @@ import logging
 from time import time
 from typing import Callable, Dict, List, Optional
 
+import msgpack
 from sentry_sdk import capture_exception, push_scope
 
 try:
@@ -16,6 +17,7 @@ except ImportError:
 
 from tenacity import (
     retry,
+    retry_base,
     retry_if_exception_type,
     stop_after_attempt,
     wait_random_exponential,
@@ -27,6 +29,7 @@ from swh.model.model import SHA1_SIZE
 from swh.objstorage.objstorage import ID_HASH_ALGO, ObjNotFoundError, ObjStorage
 
 logger = logging.getLogger(__name__)
+REPORTER = None
 
 CONTENT_OPERATIONS_METRIC = "swh_content_replayer_operations_total"
 CONTENT_RETRY_METRIC = "swh_content_replayer_retries_total"
@@ -85,67 +88,75 @@ def is_hash_in_bytearray(hash_, array, nb_hashes, hash_size=SHA1_SIZE):
 class ReplayError(Exception):
     """An error occurred during the replay of an object"""
 
-    def __init__(self, operation, *, obj_id, exc):
-        self.operation = operation
+    def __init__(self, *, obj_id, exc):
         self.obj_id = hash_to_hex(obj_id)
         self.exc = exc
 
     def __str__(self):
-        return "ReplayError(doing %s, %s, %s)" % (self.operation, self.obj_id, self.exc)
+        return "ReplayError(%s, %s)" % (self.obj_id, self.exc)
 
 
 def log_replay_retry(retry_state, sleep=None, last_result=None):
     """Log a retry of the content replayer"""
-    try:
-        exc = retry_state.outcome.exception()
-        attempt_number = retry_state.attempt_number
-    except AttributeError:
-        # tenacity < 5.0
-        exc = last_result.exception()
-        attempt_number = retry_state.statistics["attempt_number"]
-
+    exc = retry_state.outcome.exception()
+    operation = retry_state.fn.__name__
     logger.debug(
         "Retry operation %(operation)s on %(obj_id)s: %(exc)s",
-        {"operation": exc.operation, "obj_id": exc.obj_id, "exc": str(exc.exc)},
-    )
-
-    statsd.increment(
-        CONTENT_RETRY_METRIC,
-        tags={"operation": exc.operation, "attempt": str(attempt_number),},
+        {"operation": operation, "obj_id": exc.obj_id, "exc": str(exc.exc)},
     )
 
 
 def log_replay_error(retry_state):
     """Log a replay error to sentry"""
-    try:
-        exc = retry_state.outcome.exception()
-    except AttributeError:
-        # tenacity < 5.0
-        exc = retry_state.exception()
+    exc = retry_state.outcome.exception()
 
     with push_scope() as scope:
-        scope.set_tag("operation", exc.operation)
+        scope.set_tag("operation", retry_state.fn.__name__)
         scope.set_extra("obj_id", exc.obj_id)
         capture_exception(exc.exc)
+
+    error_context = {
+        "obj_id": exc.obj_id,
+        "operation": retry_state.fn.__name__,
+        "exc": str(exc.exc),
+        "retries": retry_state.attempt_number,
+    }
 
     logger.error(
         "Failed operation %(operation)s on %(obj_id)s after %(retries)s"
         " retries: %(exc)s",
-        {
-            "obj_id": exc.obj_id,
-            "operation": exc.operation,
-            "exc": str(exc.exc),
-            "retries": retry_state.attempt_number,
-        },
+        error_context,
     )
+
+    # if we have a global error (redis) reporter
+    if REPORTER is not None:
+        oid = f"blob:{exc.obj_id}"
+        msg = msgpack.dumps(error_context)
+        REPORTER(oid, msg)
 
     return None
 
 
 CONTENT_REPLAY_RETRIES = 3
 
+
+class retry_log_if_success(retry_base):
+    """Log in statsd the number of attempts required to succeed"""
+
+    def __call__(self, retry_state):
+        if not retry_state.outcome.failed:
+            statsd.increment(
+                CONTENT_RETRY_METRIC,
+                tags={
+                    "operation": retry_state.fn.__name__,
+                    "attempt": str(retry_state.attempt_number),
+                },
+            )
+        return False
+
+
 content_replay_retry = retry(
-    retry=retry_if_exception_type(ReplayError),
+    retry=retry_if_exception_type(ReplayError) | retry_log_if_success(),
     stop=stop_after_attempt(CONTENT_REPLAY_RETRIES),
     wait=wait_random_exponential(multiplier=1, max=60),
     before_sleep=log_replay_retry,
@@ -154,26 +165,39 @@ content_replay_retry = retry(
 
 
 @content_replay_retry
-def copy_object(obj_id, src, dst):
-    hex_obj_id = hash_to_hex(obj_id)
-    obj = ""
+def get_object(objstorage, obj_id):
     try:
         with statsd.timed(CONTENT_DURATION_METRIC, tags={"request": "get"}):
-            obj = src.get(obj_id)
-            logger.debug("retrieved %(obj_id)s", {"obj_id": hex_obj_id})
-
-        with statsd.timed(CONTENT_DURATION_METRIC, tags={"request": "put"}):
-            dst.add(obj, obj_id=obj_id, check_presence=False)
-            logger.debug("copied %(obj_id)s", {"obj_id": hex_obj_id})
-        statsd.increment(CONTENT_BYTES_METRIC, len(obj))
+            obj = objstorage.get(obj_id)
+            logger.debug("retrieved %(obj_id)s", {"obj_id": hash_to_hex(obj_id)})
+        return obj
     except ObjNotFoundError:
         logger.error(
-            "Failed to copy %(obj_id)s: object not found", {"obj_id": hex_obj_id}
+            "Failed to retrieve %(obj_id)s: object not found",
+            {"obj_id": hash_to_hex(obj_id)},
         )
         raise
     except Exception as exc:
-        raise ReplayError("copy", obj_id=obj_id, exc=exc) from None
-    return len(obj)
+        raise ReplayError(obj_id=obj_id, exc=exc) from None
+
+
+@content_replay_retry
+def put_object(objstorage, obj_id, obj):
+    try:
+        with statsd.timed(CONTENT_DURATION_METRIC, tags={"request": "put"}):
+            obj = objstorage.add(obj, obj_id, check_presence=False)
+            logger.debug("stored %(obj_id)s", {"obj_id": hash_to_hex(obj_id)})
+    except Exception as exc:
+        raise ReplayError(obj_id=obj_id, exc=exc) from None
+
+
+def copy_object(obj_id, src, dst):
+    obj = get_object(src, obj_id)
+    if obj is not None:
+        put_object(dst, obj_id, obj)
+        statsd.increment(CONTENT_BYTES_METRIC, len(obj))
+        return len(obj)
+    return 0
 
 
 @content_replay_retry
@@ -182,7 +206,7 @@ def obj_in_objstorage(obj_id, dst):
     try:
         return obj_id in dst
     except Exception as exc:
-        raise ReplayError("in_dst", obj_id=obj_id, exc=exc) from None
+        raise ReplayError(obj_id=obj_id, exc=exc) from None
 
 
 def process_replay_objects_content(
