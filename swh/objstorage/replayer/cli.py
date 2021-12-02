@@ -102,6 +102,11 @@ def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst):
 
     journal_cfg = conf["journal_client"]
     journal_cfg.setdefault("cls", "kafka")
+    if "error_reporter" in journal_cfg:
+        from redis import Redis
+        from swh.objstorage.replayer import replay
+        replay.REPORTER = Redis(**journal_cfg.pop("error_reporter")).set
+
     client = get_journal_client(
         **journal_cfg, stop_after_objects=stop_after_objects, object_types=("content",),
     )
