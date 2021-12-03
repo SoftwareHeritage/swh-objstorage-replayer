@@ -38,3 +38,4 @@ swh/objstorage/replayer/replay.py
 swh/objstorage/replayer/tests/__init__.py
 swh/objstorage/replayer/tests/test_cli.py
 swh/objstorage/replayer/tests/test_replay.py
+swh/objstorage/replayer/tests/test_statsd.py
