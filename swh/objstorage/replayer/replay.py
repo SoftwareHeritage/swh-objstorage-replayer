@@ -17,11 +17,11 @@ except ImportError:
 
 from tenacity import (
     retry,
-    retry_base,
     retry_if_exception_type,
     stop_after_attempt,
     wait_random_exponential,
 )
+from tenacity.retry import retry_base
 
 from swh.core.statsd import statsd
 from swh.model.hashutil import hash_to_hex
