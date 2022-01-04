@@ -1,4 +1,4 @@
-# Copyright (C) 2016-2020 The Software Heritage developers
+# Copyright (C) 2016-2022 The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
@@ -61,6 +61,40 @@ def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst):
     ``--check-dst`` sets whether the replayer should check in the destination
     ObjStorage before copying an object. You can turn that off if you know
     you're copying to an empty ObjStorage.
+
+    The expected configuration file should have 3 sections:
+
+    - objstorage: the source object storage from which to retrieve objects to
+      copy; this objstorage can (and should) be a read-only objstorage,
+
+      https://docs.softwareheritage.org/devel/apidoc/swh.objstorage.html
+
+    - objstorage_dst: the destination objstorage in which objects will be
+      written into,
+
+    - journal_client: the configuration of the kafka journal from which the
+      `content` topic will be consumed to get the list of content objects to
+      copy from the source objstorage to the destination one.
+
+      https://docs.softwareheritage.org/devel/apidoc/swh.journal.client.html
+
+    In addition to these 3 mandatory sections, an optional 'replayer' section
+    can be provided with an 'error_reporter' config entry allowing to specify a
+    Redis connection parameter set that will be used to report objects that
+    could not be copied, eg.::
+
+      objstorage:
+        [...]
+      objstorage_dst:
+        [...]
+      journal_client:
+        [...]
+      replayer:
+        error_reporter:
+          host: redis.local
+          port: 6379
+          db: 1
+
     """
     import functools
     import mmap
@@ -100,12 +134,14 @@ def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst):
     else:
         exclude_fn = None
 
-    journal_cfg = conf["journal_client"]
-    journal_cfg.setdefault("cls", "kafka")
-    if "error_reporter" in journal_cfg:
+    journal_cfg = conf.pop("journal_client")
+    replayer_cfg = conf.pop("replayer", {})
+    if "error_reporter" in replayer_cfg:
         from redis import Redis
+
         from swh.objstorage.replayer import replay
-        replay.REPORTER = Redis(**journal_cfg.pop("error_reporter")).set
+
+        replay.REPORTER = Redis(**replayer_cfg.get("error_reporter")).set
 
     client = get_journal_client(
         **journal_cfg, stop_after_objects=stop_after_objects, object_types=("content",),
