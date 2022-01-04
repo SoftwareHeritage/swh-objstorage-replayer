@@ -1,3 +1,11 @@
+swh-objstorage-replayer (0.3.2-1~swh1) unstable-swh; urgency=medium
+
+  * New upstream release 0.3.2     - (tagged by David Douard
+    <david.douard@sdfa3.org> on 2022-01-04 15:44:39 +0100)
+  * Upstream changes:     - v0.3.2
+
+ -- Software Heritage autobuilder (on jenkins-debian1) <jenkins@jenkins-debian1.internal.softwareheritage.org>  Tue, 04 Jan 2022 14:47:55 +0000
+
 swh-objstorage-replayer (0.3.1-2~swh1) unstable-swh; urgency=medium
 
   * Add missing build dependencies.
