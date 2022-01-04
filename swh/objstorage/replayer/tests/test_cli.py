@@ -1,4 +1,4 @@
-# Copyright (C) 2019-2020  The Software Heritage developers
+# Copyright (C) 2019-2022  The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
@@ -62,10 +62,9 @@ def _patch_objstorages(names):
     return decorator
 
 
-def invoke(*args, env=None, journal_config=None):
+def invoke(*args, env=None, **kwargs):
     config = copy.deepcopy(CLI_CONFIG)
-    if journal_config:
-        config["journal_client"] = journal_config
+    config.update(kwargs)
 
     runner = CliRunner()
     with tempfile.NamedTemporaryFile("a", suffix=".yml") as config_fd:
@@ -132,7 +131,8 @@ def test_replay_content(
         "replay",
         "--stop-after-objects",
         str(NUM_CONTENTS),
-        journal_config={
+        journal_client={
+            "cls": "kafka",
             "brokers": kafka_server,
             "group_id": kafka_consumer_group,
             "prefix": kafka_prefix,
@@ -170,7 +170,8 @@ def test_replay_content_structured_log(
         "replay",
         "--stop-after-objects",
         str(NUM_CONTENTS),
-        journal_config={
+        journal_client={
+            "cls": "kafka",
             "brokers": kafka_server,
             "group_id": kafka_consumer_group,
             "prefix": kafka_prefix,
@@ -216,7 +217,8 @@ def test_replay_content_static_group_id(
         "--stop-after-objects",
         str(NUM_CONTENTS),
         env={"KAFKA_GROUP_INSTANCE_ID": "static-group-instance-id"},
-        journal_config={
+        journal_client={
+            "cls": "kafka",
             "brokers": kafka_server,
             "group_id": kafka_consumer_group,
             "prefix": kafka_prefix,
@@ -273,7 +275,8 @@ def test_replay_content_exclude(
             str(NUM_CONTENTS),
             "--exclude-sha1-file",
             fd.name,
-            journal_config={
+            journal_client={
+                "cls": "kafka",
                 "brokers": kafka_server,
                 "group_id": kafka_consumer_group,
                 "prefix": kafka_prefix,
@@ -337,7 +340,8 @@ def test_replay_content_check_dst(
         "--stop-after-objects",
         str(NUM_CONTENTS),
         "--check-dst" if check_dst else "--no-check-dst",
-        journal_config={
+        journal_client={
+            "cls": "kafka",
             "brokers": kafka_server,
             "group_id": kafka_consumer_group,
             "prefix": kafka_prefix,
@@ -446,10 +450,13 @@ def test_replay_content_check_dst_retry(
         "--check-dst",
         "--stop-after-objects",
         str(NUM_CONTENTS),
-        journal_config={
+        journal_client={
+            "cls": "kafka",
             "brokers": kafka_server,
             "group_id": kafka_consumer_group,
             "prefix": kafka_prefix,
+        },
+        replayer={
             "error_reporter": {"host": redis_proc.host, "port": redis_proc.port},
         },
     )
@@ -544,10 +551,13 @@ def test_replay_content_failed_copy_retry(
         "replay",
         "--stop-after-objects",
         str(NUM_CONTENTS),
-        journal_config={
+        journal_client={
+            "cls": "kafka",
             "brokers": kafka_server,
             "group_id": kafka_consumer_group,
             "prefix": kafka_prefix,
+        },
+        replayer={
             "error_reporter": {"host": redis_proc.host, "port": redis_proc.port},
         },
     )
@@ -628,7 +638,8 @@ def test_replay_content_objnotfound(
         "replay",
         "--stop-after-objects",
         str(NUM_CONTENTS),
-        journal_config={
+        journal_client={
+            "cls": "kafka",
             "brokers": kafka_server,
             "group_id": kafka_consumer_group,
             "prefix": kafka_prefix,
