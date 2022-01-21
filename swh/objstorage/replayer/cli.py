@@ -36,8 +36,16 @@ from swh.objstorage.cli import objstorage_cli_group
     default=True,
     help="Check whether the destination contains the object before copying.",
 )
+@click.option(
+    "--concurrency",
+    default=4,
+    help=(
+        "Number of concurrent threads doing the actual copy of blobs between "
+        "the source and destination objstorages."
+    ),
+)
 @click.pass_context
-def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst):
+def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst, concurrency):
     """Fill a destination Object Storage using a journal stream.
 
     This is typically used for a mirror configuration, by reading a Journal
@@ -61,6 +69,13 @@ def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst):
     ``--check-dst`` sets whether the replayer should check in the destination
     ObjStorage before copying an object. You can turn that off if you know
     you're copying to an empty ObjStorage.
+
+    ``--concurrency N`` sets the number of threads in charge of copy blob objects
+    from the source objstorage to the destination one. Using a large concurrency
+    value make sense if both the source and destination objstorages support highly
+    parallel workloads. Make not to set the ``batch_size`` configuration option too
+    low for the concurrency to be actually useful (each batch of kafka messages is
+    dispatched among the threads).
 
     The expected configuration file should have 3 sections:
 
@@ -152,6 +167,7 @@ def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst):
         dst=objstorage_dst,
         exclude_fn=exclude_fn,
         check_dst=check_dst,
+        concurrency=concurrency,
     )
 
     if notify:
