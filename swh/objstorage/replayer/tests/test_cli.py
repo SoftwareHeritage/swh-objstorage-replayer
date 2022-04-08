@@ -29,8 +29,14 @@ logger = logging.getLogger(__name__)
 
 
 CLI_CONFIG = {
-    "objstorage": {"cls": "mocked", "name": "src",},
-    "objstorage_dst": {"cls": "mocked", "name": "dst",},
+    "objstorage": {
+        "cls": "mocked",
+        "name": "src",
+    },
+    "objstorage_dst": {
+        "cls": "mocked",
+        "name": "dst",
+    },
 }
 
 
@@ -72,12 +78,18 @@ def invoke(*args, env=None, **kwargs):
         config_fd.seek(0)
         args = ["-C" + config_fd.name] + list(args)
         return runner.invoke(
-            objstorage_cli_group, args, obj={"log_level": logging.DEBUG}, env=env,
+            objstorage_cli_group,
+            args,
+            obj={"log_level": logging.DEBUG},
+            env=env,
         )
 
 
 def test_replay_help():
-    result = invoke("replay", "--help",)
+    result = invoke(
+        "replay",
+        "--help",
+    )
     expected = (
         r"^\s*Usage: objstorage replay \[OPTIONS\]\s+"
         r"Fill a destination Object Storage.*"
@@ -106,7 +118,12 @@ def _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorage):
         producer.produce(
             topic=kafka_prefix + ".content",
             key=key_to_kafka(sha1),
-            value=key_to_kafka({"sha1": sha1, "status": "visible",}),
+            value=key_to_kafka(
+                {
+                    "sha1": sha1,
+                    "status": "visible",
+                }
+            ),
         )
 
     producer.flush()
@@ -539,10 +556,12 @@ def test_replay_content_failed_copy_retry(
     assert get_failures
     assert definitely_failed
     objstorages["dst"] = FlakyObjStorage(
-        state=objstorages["dst"].state, failures=add_failures,
+        state=objstorages["dst"].state,
+        failures=add_failures,
     )
     objstorages["src"] = FlakyObjStorage(
-        state=objstorages["src"].state, failures=get_failures,
+        state=objstorages["src"].state,
+        failures=get_failures,
     )
 
     caplog.set_level(logging.DEBUG, "swh.objstorage.replayer.replay")

@@ -159,7 +159,9 @@ def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst, concur
         replay.REPORTER = Redis(**replayer_cfg.get("error_reporter")).set
 
     client = get_journal_client(
-        **journal_cfg, stop_after_objects=stop_after_objects, object_types=("content",),
+        **journal_cfg,
+        stop_after_objects=stop_after_objects,
+        object_types=("content",),
     )
     worker_fn = functools.partial(
         process_replay_objects_content,

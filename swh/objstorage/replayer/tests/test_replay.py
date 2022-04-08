@@ -25,7 +25,8 @@ CONTENTS = [Content.from_data(f"foo{i}".encode()) for i in range(10)] + [
 
 @settings(max_examples=500)
 @given(
-    sets(sha1(), min_size=0, max_size=500), sets(sha1(), min_size=10),
+    sets(sha1(), min_size=0, max_size=500),
+    sets(sha1(), min_size=10),
 )
 def test_is_hash_in_bytearray(haystack, needles):
     array = b"".join(sorted(haystack))
