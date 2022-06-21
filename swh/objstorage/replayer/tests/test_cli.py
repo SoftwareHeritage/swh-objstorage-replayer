@@ -20,7 +20,7 @@ import pytest
 import yaml
 
 from swh.journal.serializers import key_to_kafka
-from swh.model.hashutil import hash_to_hex
+from swh.model.hashutil import MultiHash, hash_to_hex
 from swh.objstorage.backends.in_memory import InMemoryObjStorage
 from swh.objstorage.replayer.cli import objstorage_cli_group
 from swh.objstorage.replayer.replay import CONTENT_REPLAY_RETRIES
@@ -113,7 +113,8 @@ def _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorage):
     contents = {}
     for i in range(NUM_CONTENTS):
         content = b"\x00" * 19 + bytes([i])
-        sha1 = objstorage.add(content)
+        sha1 = MultiHash(["sha1"]).from_data(content).digest()["sha1"]
+        objstorage.add(content=content, obj_id=sha1)
         contents[sha1] = content
         producer.produce(
             topic=kafka_prefix + ".content",

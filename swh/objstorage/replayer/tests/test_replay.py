@@ -50,7 +50,7 @@ def test_replay_content(kafka_server, kafka_prefix, kafka_consumer_group):
     )
 
     for content in CONTENTS:
-        objstorage1.add(content.data)
+        objstorage1.add(content.data, obj_id=content.sha1)
         writer.write_addition("content", content)
 
     replayer = JournalClient(
