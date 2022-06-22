@@ -1,4 +1,2 @@
-
-        [swh.cli.subcommands]
-        content-replayer=swh.objstorage.replayer.cli
-    
+[swh.cli.subcommands]
+content-replayer = swh.objstorage.replayer.cli

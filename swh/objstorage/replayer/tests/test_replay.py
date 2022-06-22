@@ -25,7 +25,8 @@ CONTENTS = [Content.from_data(f"foo{i}".encode()) for i in range(10)] + [
 
 @settings(max_examples=500)
 @given(
-    sets(sha1(), min_size=0, max_size=500), sets(sha1(), min_size=10),
+    sets(sha1(), min_size=0, max_size=500),
+    sets(sha1(), min_size=10),
 )
 def test_is_hash_in_bytearray(haystack, needles):
     array = b"".join(sorted(haystack))
@@ -49,7 +50,7 @@ def test_replay_content(kafka_server, kafka_prefix, kafka_consumer_group):
     )
 
     for content in CONTENTS:
-        objstorage1.add(content.data)
+        objstorage1.add(content.data, obj_id=content.sha1)
         writer.write_addition("content", content)
 
     replayer = JournalClient(

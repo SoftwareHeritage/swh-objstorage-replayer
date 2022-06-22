@@ -49,7 +49,7 @@ def test_replay_statsd(kafka_server, kafka_prefix, kafka_consumer_group, statsd)
     ]
 
     for content in contents:
-        objstorage1.add(content.data)
+        objstorage1.add(content.data, obj_id=content.sha1)
         writer.write_addition("content", content)
     excluded = [c.sha1 for c in contents[2:4]]
 
@@ -57,7 +57,7 @@ def test_replay_statsd(kafka_server, kafka_prefix, kafka_consumer_group, statsd)
         return cnt_d["sha1"] in excluded
 
     for content in contents[4:6]:
-        objstorage2.add(content.data)
+        objstorage2.add(content.data, obj_id=content.sha1)
 
     replayer = JournalClient(
         brokers=kafka_server,
