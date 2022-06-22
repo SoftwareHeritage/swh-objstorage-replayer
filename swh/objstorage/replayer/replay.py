@@ -187,7 +187,7 @@ def get_object(objstorage, obj_id):
 def put_object(objstorage, obj_id, obj):
     try:
         with statsd.timed(CONTENT_DURATION_METRIC, tags={"request": "put"}):
-            obj = objstorage.add(obj, obj_id, check_presence=False)
+            objstorage.add(obj, obj_id, check_presence=False)
             logger.debug("stored %(obj_id)s", {"obj_id": hash_to_hex(obj_id)})
     except Exception as exc:
         raise ReplayError(obj_id=obj_id, exc=exc) from None
