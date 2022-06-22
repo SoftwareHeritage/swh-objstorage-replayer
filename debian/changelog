@@ -1,3 +1,13 @@
+swh-objstorage-replayer (1.1.0-1~swh1) unstable-swh; urgency=medium
+
+  * New upstream release 1.1.0     - (tagged by Nicolas Dandrimont
+    <nicolas@dandrimont.eu> on 2022-06-22 14:14:16 +0200)
+  * Upstream changes:     - Release swh.objstorage.replayer 1.1.0     -
+    Bump linters and other tools     - Prepare for objstorage 2.0 api
+    breaks
+
+ -- Software Heritage autobuilder (on jenkins-debian1) <jenkins@jenkins-debian1.internal.softwareheritage.org>  Wed, 22 Jun 2022 12:17:53 +0000
+
 swh-objstorage-replayer (1.0.0-1~swh1) unstable-swh; urgency=medium
 
   * New upstream release 1.0.0     - (tagged by David Douard
