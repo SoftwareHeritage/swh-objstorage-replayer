@@ -241,11 +241,16 @@ def process_replay_objects_content(
 
     Example:
 
+    >>> import hashlib
     >>> from swh.objstorage.factory import get_objstorage
     >>> src = get_objstorage('memory')
     >>> dst = get_objstorage('memory')
-    >>> id1 = src.add(b'foo bar')
-    >>> id2 = src.add(b'baz qux')
+    >>> cnt1 = b'foo bar'
+    >>> cnt2 = b'baz qux'
+    >>> id1 = hashlib.sha1(cnt1).digest()
+    >>> id2 = hashlib.sha1(cnt2).digest()
+    >>> src.add(b'foo bar', obj_id=id1)
+    >>> src.add(b'baz qux', obj_id=id2)
     >>> kafka_partitions = {
     ...     'content': [
     ...         {
