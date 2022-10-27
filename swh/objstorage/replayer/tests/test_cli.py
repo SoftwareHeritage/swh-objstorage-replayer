@@ -10,7 +10,7 @@ import logging
 import re
 from subprocess import Popen
 import tempfile
-from typing import Tuple
+from typing import Any, Dict, Optional, Tuple
 from unittest.mock import patch
 
 from click.testing import CliRunner
@@ -246,16 +246,19 @@ def test_replay_content_static_group_id(
     assert result.exit_code == 0, result.output
     assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
 
-    consumer_settings = None
+    consumer_settings: Optional[Dict[str, Any]] = None
     for record in caplog.records:
         if "Consumer settings" in record.message:
-            consumer_settings = record.args
-            break
+            consumer_settings = {}
+        elif consumer_settings is not None and len(record.args) == 2:
+            key, value = record.args
+            consumer_settings[key] = value
 
     assert consumer_settings is not None, (
         "Failed to get consumer settings out of the consumer log. "
         "See log capture for details."
     )
+
     assert consumer_settings["group.instance.id"] == "static-group-instance-id"
     assert consumer_settings["session.timeout.ms"] == 60 * 10 * 1000
     assert consumer_settings["max.poll.interval.ms"] == 90 * 10 * 1000
