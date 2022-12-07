@@ -33,6 +33,12 @@ class FailingObjstorage(ObjStorageFilter):
             return self.storage.get(obj_id, *args, **kwargs)
         raise Exception("Nope")
 
+    def add(self, content, obj_id, check_presence=True, *args, **kwargs):
+        self.calls[obj_id] += 1
+        if (self.calls[obj_id] % self.rate) == 0:
+            return self.storage.add(content, obj_id, check_presence, *args, **kwargs)
+        raise Exception("Nope")
+
 
 class NotFoundObjstorage(ObjStorageFilter):
     def get(self, obj_id, *args, **kwargs):
@@ -202,6 +208,94 @@ def test_replay_content_not_found(
             stat for (meth, oid, stat) in stats if oid == obj_id and meth == "get"
         )
         # ObjectNotFound should not be retried several times...
+        assert get.get("attempt_number") == 1
+        assert get.get("start_time") > 0
+        assert get.get("idle_for") == 0
+
+
+def test_replay_content_with_transient_add_errors(
+    kafka_server, kafka_prefix, kafka_consumer_group, monkeypatch
+):
+    replayer, src_objstorage = prepare_test(
+        kafka_server, kafka_prefix, kafka_consumer_group
+    )
+    dst_objstorage = get_objstorage(cls="memory")
+    dst_objstorage = FailingObjstorage(dst_objstorage)
+
+    q = Queue()
+    monkeypatch.setattr(replay, "copy_object", copy_object_q(q))
+
+    worker_fn = functools.partial(
+        replay.process_replay_objects_content,
+        src=src_objstorage,
+        dst=dst_objstorage,
+    )
+    replayer.process(worker_fn)
+
+    # only content with status visible will be copied in storage2
+    expected_objstorage_state = {
+        c.sha1: c.data for c in CONTENTS if c.status == "visible"
+    }
+    assert expected_objstorage_state == dst_objstorage.storage.state
+
+    stats = [q.get_nowait() for i in range(q.qsize())]
+    for obj_id in expected_objstorage_state:
+        put = next(
+            stat for (meth, oid, stat) in stats if oid == obj_id and meth == "put"
+        )
+        assert put.get("attempt_number") == 3
+        assert put.get("start_time") > 0
+        assert put.get("idle_for") > 0
+        assert put.get("delay_since_first_attempt") > 0
+
+        get = next(
+            stat for (meth, oid, stat) in stats if oid == obj_id and meth == "get"
+        )
+        assert get.get("attempt_number") == 1
+        assert get.get("start_time") > 0
+        assert get.get("idle_for") == 0
+
+
+def test_replay_content_with_add_errors(
+    kafka_server, kafka_prefix, kafka_consumer_group, monkeypatch
+):
+    replayer, src_objstorage = prepare_test(
+        kafka_server, kafka_prefix, kafka_consumer_group
+    )
+    dst_objstorage = get_objstorage(cls="memory")
+    dst_objstorage = FailingObjstorage(dst_objstorage)
+
+    q = Queue()
+    monkeypatch.setattr(replay, "copy_object", copy_object_q(q))
+    monkeypatch.setattr(replay.get_object.retry.stop, "max_attempt_number", 2)
+
+    worker_fn = functools.partial(
+        replay.process_replay_objects_content,
+        src=src_objstorage,
+        dst=dst_objstorage,
+    )
+    replayer.process(worker_fn)
+
+    # no object could be replicated
+    assert dst_objstorage.storage.state == {}
+
+    stats = [q.get_nowait() for i in range(q.qsize())]
+    for obj in CONTENTS:
+        if obj.status != "visible":
+            continue
+
+        obj_id = obj.sha1
+        put = next(
+            stat for (meth, oid, stat) in stats if oid == obj_id and meth == "put"
+        )
+        assert put.get("attempt_number") == 2
+        assert put.get("start_time") > 0
+        assert put.get("idle_for") > 0
+        assert put.get("delay_since_first_attempt") > 0
+
+        get = next(
+            stat for (meth, oid, stat) in stats if oid == obj_id and meth == "get"
+        )
         assert get.get("attempt_number") == 1
         assert get.get("start_time") > 0
         assert get.get("idle_for") == 0
