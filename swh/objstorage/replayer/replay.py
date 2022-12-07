@@ -194,10 +194,16 @@ def get_object(objstorage, obj_id):
 @content_replay_retry
 def put_object(objstorage, obj_id, obj):
     try:
+        logger.debug("putting %(obj_id)s", {"obj_id": hash_to_hex(obj_id)})
         with statsd.timed(CONTENT_DURATION_METRIC, tags={"request": "put"}):
+            logger.debug("storing %(obj_id)s", {"obj_id": hash_to_hex(obj_id)})
             objstorage.add(obj, obj_id, check_presence=False)
             logger.debug("stored %(obj_id)s", {"obj_id": hash_to_hex(obj_id)})
     except Exception as exc:
+        logger.error(
+            "putting %(obj_id)s failed: %(exc)r",
+            {"obj_id": hash_to_hex(obj_id), "exc": exc},
+        )
         raise ReplayError(obj_id=obj_id, exc=exc) from None
 
 
@@ -281,8 +287,8 @@ def process_replay_objects_content(
     """
 
     def _copy_object(obj):
-
         obj_id = obj[ID_HASH_ALGO]
+        logger.debug("Starting copy object %s", hash_to_hex(obj_id))
         if obj["status"] != "visible":
             logger.debug("skipped %s (status=%s)", hash_to_hex(obj_id), obj["status"])
             statsd.increment(
@@ -302,24 +308,29 @@ def process_replay_objects_content(
             try:
                 copied_bytes = copy_object(obj_id, src, dst)
             except ObjNotFoundError:
+                logger.debug("not found %s", hash_to_hex(obj_id))
                 statsd.increment(
                     CONTENT_OPERATIONS_METRIC, tags={"decision": "not_in_src"}
                 )
                 return "not_found", None
-            except Exception:
+            except Exception as exc:
+                logger.info("failed %s (%r)", hash_to_hex(obj_id), exc)
                 statsd.increment(CONTENT_OPERATIONS_METRIC, tags={"decision": "failed"})
                 return "failed", None
             else:
                 if copied_bytes is None:
+                    logger.debug("failed %s (None)", hash_to_hex(obj_id))
                     statsd.increment(
                         CONTENT_OPERATIONS_METRIC, tags={"decision": "failed"}
                     )
                     return "failed", None
                 else:
+                    logger.debug("copied %s (%d)", hash_to_hex(obj_id), copied_bytes)
                     statsd.increment(
                         CONTENT_OPERATIONS_METRIC, tags={"decision": "copied"}
                     )
                     return "copied", copied_bytes
+        logger.debug("failed %s (XXX)", hash_to_hex(obj_id))
         return "failed", None
 
     vol = 0
@@ -338,8 +349,9 @@ def process_replay_objects_content(
                 continue
             for obj in objects:
                 futures.append(pool.submit(_copy_object, obj=obj))
-
+        logger.debug("Waiting for futures (%d)", len(futures))
         futures_wait(futures)
+    logger.debug("Checking futures results")
     for f in futures:
         exc = f.exception()
         if exc:
@@ -354,14 +366,16 @@ def process_replay_objects_content(
     dt = time() - t0
     logger.info(
         "processed %s content objects (%s) in %s "
-        "(%.1f obj/sec, %s/sec) - %d copied - %d skipped - %d excluded - "
-        "%d not found - %d failed",
+        "(%.1f obj/sec, %s/sec) "
+        "- %d copied - %d in dst - %d skipped "
+        "- %d excluded - %d not found - %d failed",
         len(futures),
         naturalsize(vol),
         naturaldelta(dt),
         len(futures) / dt,
         naturalsize(vol / dt),
         stats["copied"],
+        stats["in_dst"],
         stats["skipped"],
         stats["excluded"],
         stats["not_found"],
