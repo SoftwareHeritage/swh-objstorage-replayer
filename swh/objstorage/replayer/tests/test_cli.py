@@ -10,7 +10,7 @@ import logging
 import re
 from subprocess import Popen
 import tempfile
-from typing import Tuple
+from typing import Any, Dict, Optional, Tuple
 from unittest.mock import patch
 
 from click.testing import CliRunner
@@ -246,16 +246,19 @@ def test_replay_content_static_group_id(
     assert result.exit_code == 0, result.output
     assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
 
-    consumer_settings = None
+    consumer_settings: Optional[Dict[str, Any]] = None
     for record in caplog.records:
         if "Consumer settings" in record.message:
-            consumer_settings = record.args
-            break
+            consumer_settings = {}
+        elif consumer_settings is not None and len(record.args) == 2:
+            key, value = record.args
+            consumer_settings[key] = value
 
     assert consumer_settings is not None, (
         "Failed to get consumer settings out of the consumer log. "
         "See log capture for details."
     )
+
     assert consumer_settings["group.instance.id"] == "static-group-instance-id"
     assert consumer_settings["session.timeout.ms"] == 60 * 10 * 1000
     assert consumer_settings["max.poll.interval.ms"] == 90 * 10 * 1000
@@ -369,22 +372,29 @@ def test_replay_content_check_dst(
     assert result.exit_code == 0, result.output
     assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
 
-    retrieved = 0
-    stored = 0
-    in_dst = 0
+    stats = dict.fromkeys(
+        ["tot", "copied", "in_dst", "skipped", "excluded", "not_found", "failed"], 0
+    )
+    reg = re.compile(
+        r"processed (?P<tot>\d+) content objects .*"
+        r" *- (?P<copied>\d+) copied"
+        r" *- (?P<in_dst>\d+) in dst"
+        r" *- (?P<skipped>\d+) skipped"
+        r" *- (?P<excluded>\d+) excluded"
+        r" *- (?P<not_found>\d+) not found"
+        r" *- (?P<failed>\d+) failed"
+    )
     for record in caplog.records:
         logtext = record.getMessage()
-        if "retrieved" in logtext:
-            retrieved += 1
-        elif "stored" in logtext:
-            stored += 1
-        elif "in dst" in logtext:
-            in_dst += 1
+        m = reg.match(logtext)
+        if m:
+            for k, v in m.groupdict().items():
+                stats[k] += int(v)
+
+    assert stats["tot"] == sum(v for k, v in stats.items() if k != "tot")
 
     assert (
-        retrieved == expected_copied
-        and stored == expected_copied
-        and in_dst == expected_in_dst
+        stats["copied"] == expected_copied and stats["in_dst"] == expected_in_dst
     ), "Unexpected amount of objects copied, see the captured log for details"
 
     for (sha1, content) in contents.items():
