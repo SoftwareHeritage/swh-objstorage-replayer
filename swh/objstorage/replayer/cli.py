@@ -32,6 +32,12 @@ from swh.objstorage.cli import objstorage_cli_group
     help="File containing a sorted array of hashes to be excluded.",
 )
 @click.option(
+    "--size-limit",
+    default=0,
+    type=int,
+    help="Exclude files which size is over this limit. 0 (default) means no size limit.",
+)
+@click.option(
     "--check-dst/--no-check-dst",
     default=True,
     help="Check whether the destination contains the object before copying.",
@@ -45,7 +51,9 @@ from swh.objstorage.cli import objstorage_cli_group
     ),
 )
 @click.pass_context
-def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst, concurrency):
+def content_replay(
+    ctx, stop_after_objects, exclude_sha1_file, size_limit, check_dst, concurrency
+):
     """Fill a destination Object Storage using a journal stream.
 
     This is typically used for a mirror configuration, by reading a Journal
@@ -65,6 +73,9 @@ def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst, concur
     and it must be sorted.
     This file will not be fully loaded into memory at any given time,
     so it can be arbitrarily large.
+
+    ``--size-limit`` exclude file content which size is (strictly) above
+    the given size limit. If 0, then there is no size limit.
 
     ``--check-dst`` sets whether the replayer should check in the destination
     ObjStorage before copying an object. You can turn that off if you know
@@ -134,6 +145,7 @@ def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst, concur
             "You must have a destination objstorage configured " "in your config file."
         )
 
+    exclude_fns = []
     if exclude_sha1_file:
         map_ = mmap.mmap(exclude_sha1_file.fileno(), 0, prot=mmap.PROT_READ)
         if map_.size() % SHA1_SIZE != 0:
@@ -143,8 +155,25 @@ def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst, concur
             )
         nb_excluded_hashes = int(map_.size() / SHA1_SIZE)
 
-        def exclude_fn(obj):
+        def exclude_by_hash(obj):
             return is_hash_in_bytearray(obj["sha1"], map_, nb_excluded_hashes)
+
+        exclude_fns.append(exclude_by_hash)
+
+    if size_limit:
+
+        def exclude_by_size(obj):
+            return obj["length"] > size_limit
+
+        exclude_fns.append(exclude_by_size)
+
+    if exclude_fns:
+
+        def exclude_fn(obj):
+            for fn in exclude_fns:
+                if fn(obj):
+                    return True
+            return False
 
     else:
         exclude_fn = None
