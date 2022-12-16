@@ -112,7 +112,7 @@ def _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorage):
 
     contents = {}
     for i in range(NUM_CONTENTS):
-        content = b"\x00" * 19 + bytes([i])
+        content = b"\x00" * i + bytes([i])
         sha1 = MultiHash(["sha1"]).from_data(content).digest()["sha1"]
         objstorage.add(content=content, obj_id=sha1)
         contents[sha1] = content
@@ -122,6 +122,7 @@ def _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorage):
             value=key_to_kafka(
                 {
                     "sha1": sha1,
+                    "length": len(content),
                     "status": "visible",
                 }
             ),
@@ -269,7 +270,7 @@ def test_replay_content_static_group_id(
 
 
 @_patch_objstorages(["src", "dst"])
-def test_replay_content_exclude(
+def test_replay_content_exclude_by_hash(
     objstorages,
     kafka_prefix: str,
     kafka_consumer_group: str,
@@ -277,7 +278,7 @@ def test_replay_content_exclude(
 ):
     """Check the content replayer in normal conditions
 
-    with a exclusion file (--exclude-sha1-file)
+    with an exclusion file (--exclude-sha1-file)
     """
 
     contents = _fill_objstorage_and_kafka(
@@ -309,6 +310,98 @@ def test_replay_content_exclude(
 
     for (sha1, content) in contents.items():
         if sha1 in excluded_contents:
+            assert sha1 not in objstorages["dst"], sha1
+        else:
+            assert sha1 in objstorages["dst"], sha1
+            assert objstorages["dst"].get(sha1) == content
+
+
+@_patch_objstorages(["src", "dst"])
+def test_replay_content_exclude_by_size(
+    objstorages,
+    kafka_prefix: str,
+    kafka_consumer_group: str,
+    kafka_server: Tuple[Popen, int],
+):
+    """Check the content replayer in normal conditions
+
+    with a size limit (--size-limit)
+    """
+
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
+
+    result = invoke(
+        "replay",
+        "--stop-after-objects",
+        str(NUM_CONTENTS),
+        "--size-limit",
+        5,
+        journal_client={
+            "cls": "kafka",
+            "brokers": kafka_server,
+            "group_id": kafka_consumer_group,
+            "prefix": kafka_prefix,
+        },
+    )
+    expected = r"Done.\n"
+    assert result.exit_code == 0, result.output
+    assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
+    assert [c for c in contents.values() if len(c) > 5]
+    assert [c for c in contents.values() if len(c) <= 5]
+    for (sha1, content) in contents.items():
+        if len(content) > 5:
+            assert sha1 not in objstorages["dst"], sha1
+        else:
+            assert sha1 in objstorages["dst"], sha1
+            assert objstorages["dst"].get(sha1) == content
+
+
+@_patch_objstorages(["src", "dst"])
+def test_replay_content_exclude_by_both(
+    objstorages,
+    kafka_prefix: str,
+    kafka_consumer_group: str,
+    kafka_server: Tuple[Popen, int],
+):
+    """Check the content replayer in normal conditions
+
+    with both an exclusion file (--exclude-sha1-file) and a size limit (--size-limit)
+    """
+
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
+    excluded_contents = list(contents)[0::2]  # picking half of them
+    with tempfile.NamedTemporaryFile(mode="w+b") as fd:
+        fd.write(b"".join(sorted(excluded_contents)))
+
+        fd.seek(0)
+
+        result = invoke(
+            "replay",
+            "--stop-after-objects",
+            str(NUM_CONTENTS),
+            "--size-limit",
+            5,
+            "--exclude-sha1-file",
+            fd.name,
+            journal_client={
+                "cls": "kafka",
+                "brokers": kafka_server,
+                "group_id": kafka_consumer_group,
+                "prefix": kafka_prefix,
+            },
+        )
+    expected = r"Done.\n"
+    assert result.exit_code == 0, result.output
+    assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
+
+    for (sha1, content) in contents.items():
+        if len(content) > 5:
+            assert sha1 not in objstorages["dst"], sha1
+        elif sha1 in excluded_contents:
             assert sha1 not in objstorages["dst"], sha1
         else:
             assert sha1 in objstorages["dst"], sha1
