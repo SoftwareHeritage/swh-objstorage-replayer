@@ -1,20 +1,22 @@
-# Copyright (C) 2022  The Software Heritage developers
+# Copyright (C) 2022-2023  The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
 
 from collections import defaultdict
-import functools
 from queue import Queue
 
 from swh.journal.client import JournalClient
 from swh.journal.writer import get_journal_writer
 from swh.model.model import Content
+from swh.objstorage import factory
 from swh.objstorage.exc import ObjNotFoundError
-from swh.objstorage.factory import get_objstorage
 from swh.objstorage.multiplexer.filter.filter import ObjStorageFilter
 from swh.objstorage.replayer import replay
 from swh.objstorage.replayer.replay import copy_object  # needed for MonkeyPatch
+from swh.objstorage.replayer.tests.test_cli import (
+    _patch_objstorages as patch_objstorages,
+)
 
 CONTENTS = [Content.from_data(f"foo{i}".encode()) for i in range(10)] + [
     Content.from_data(f"forbidden foo{i}".encode(), status="hidden") for i in range(10)
@@ -46,7 +48,7 @@ class NotFoundObjstorage(ObjStorageFilter):
 
 
 def prepare_test(kafka_server, kafka_prefix, kafka_consumer_group):
-    src_objstorage = get_objstorage(cls="memory")
+    src_objstorage = factory.get_objstorage(cls="mocked", name="src")
 
     writer = get_journal_writer(
         cls="kafka",
@@ -85,24 +87,24 @@ def copy_object_q(q):
     return wrap
 
 
+@patch_objstorages(["src", "dst"])
 def test_replay_content_with_transient_errors(
-    kafka_server, kafka_prefix, kafka_consumer_group, monkeypatch
+    objstorages, kafka_server, kafka_prefix, kafka_consumer_group, monkeypatch
 ):
-    replayer, src_objstorage = prepare_test(
+    client, src_objstorage = prepare_test(
         kafka_server, kafka_prefix, kafka_consumer_group
     )
-    dst_objstorage = get_objstorage(cls="memory")
-    src_objstorage = FailingObjstorage(src_objstorage)
+    dst_objstorage = objstorages["dst"]
+    objstorages["src"] = FailingObjstorage(src_objstorage)
 
     q = Queue()
     monkeypatch.setattr(replay, "copy_object", copy_object_q(q))
 
-    worker_fn = functools.partial(
-        replay.process_replay_objects_content,
-        src=src_objstorage,
-        dst=dst_objstorage,
-    )
-    replayer.process(worker_fn)
+    with replay.ContentReplayer(
+        src={"cls": "mocked", "name": "src"},
+        dst={"cls": "mocked", "name": "dst"},
+    ) as replayer:
+        client.process(replayer.replay)
 
     # only content with status visible will be copied in storage2
     expected_objstorage_state = {
@@ -128,25 +130,25 @@ def test_replay_content_with_transient_errors(
         assert get.get("delay_since_first_attempt") > 0
 
 
+@patch_objstorages(["src", "dst"])
 def test_replay_content_with_errors(
-    kafka_server, kafka_prefix, kafka_consumer_group, monkeypatch
+    objstorages, kafka_server, kafka_prefix, kafka_consumer_group, monkeypatch
 ):
-    replayer, src_objstorage = prepare_test(
+    client, src_objstorage = prepare_test(
         kafka_server, kafka_prefix, kafka_consumer_group
     )
-    dst_objstorage = get_objstorage(cls="memory")
-    src_objstorage = FailingObjstorage(src_objstorage)
+    dst_objstorage = objstorages["dst"]
+    objstorages["src"] = FailingObjstorage(src_objstorage)
 
     q = Queue()
     monkeypatch.setattr(replay, "copy_object", copy_object_q(q))
     monkeypatch.setattr(replay.get_object.retry.stop, "max_attempt_number", 2)
 
-    worker_fn = functools.partial(
-        replay.process_replay_objects_content,
-        src=src_objstorage,
-        dst=dst_objstorage,
-    )
-    replayer.process(worker_fn)
+    with replay.ContentReplayer(
+        src={"cls": "mocked", "name": "src"},
+        dst={"cls": "mocked", "name": "dst"},
+    ) as replayer:
+        client.process(replayer.replay)
 
     # no object could be replicated
     assert dst_objstorage.state == {}
@@ -171,24 +173,24 @@ def test_replay_content_with_errors(
         assert get.get("delay_since_first_attempt") > 0
 
 
+@patch_objstorages(["src", "dst"])
 def test_replay_content_not_found(
-    kafka_server, kafka_prefix, kafka_consumer_group, monkeypatch
+    objstorages, kafka_server, kafka_prefix, kafka_consumer_group, monkeypatch
 ):
-    replayer, src_objstorage = prepare_test(
+    client, src_objstorage = prepare_test(
         kafka_server, kafka_prefix, kafka_consumer_group
     )
-    dst_objstorage = get_objstorage(cls="memory")
-    src_objstorage = NotFoundObjstorage(src_objstorage)
+    dst_objstorage = objstorages["dst"]
+    objstorages["src"] = NotFoundObjstorage(src_objstorage)
 
     q = Queue()
     monkeypatch.setattr(replay, "copy_object", copy_object_q(q))
 
-    worker_fn = functools.partial(
-        replay.process_replay_objects_content,
-        src=src_objstorage,
-        dst=dst_objstorage,
-    )
-    replayer.process(worker_fn)
+    with replay.ContentReplayer(
+        src={"cls": "mocked", "name": "src"},
+        dst={"cls": "mocked", "name": "dst"},
+    ) as replayer:
+        client.process(replayer.replay)
 
     # no object could be replicated
     assert dst_objstorage.state == {}
@@ -213,24 +215,24 @@ def test_replay_content_not_found(
         assert get.get("idle_for") == 0
 
 
+@patch_objstorages(["src", "dst"])
 def test_replay_content_with_transient_add_errors(
-    kafka_server, kafka_prefix, kafka_consumer_group, monkeypatch
+    objstorages, kafka_server, kafka_prefix, kafka_consumer_group, monkeypatch
 ):
-    replayer, src_objstorage = prepare_test(
+    client, src_objstorage = prepare_test(
         kafka_server, kafka_prefix, kafka_consumer_group
     )
-    dst_objstorage = get_objstorage(cls="memory")
-    dst_objstorage = FailingObjstorage(dst_objstorage)
+    objstorages["dst"] = FailingObjstorage(objstorages["dst"])
+    dst_objstorage = objstorages["dst"]
 
     q = Queue()
     monkeypatch.setattr(replay, "copy_object", copy_object_q(q))
 
-    worker_fn = functools.partial(
-        replay.process_replay_objects_content,
-        src=src_objstorage,
-        dst=dst_objstorage,
-    )
-    replayer.process(worker_fn)
+    with replay.ContentReplayer(
+        src={"cls": "mocked", "name": "src"},
+        dst={"cls": "mocked", "name": "dst"},
+    ) as replayer:
+        client.process(replayer.replay)
 
     # only content with status visible will be copied in storage2
     expected_objstorage_state = {
@@ -256,25 +258,25 @@ def test_replay_content_with_transient_add_errors(
         assert get.get("idle_for") == 0
 
 
+@patch_objstorages(["src", "dst"])
 def test_replay_content_with_add_errors(
-    kafka_server, kafka_prefix, kafka_consumer_group, monkeypatch
+    objstorages, kafka_server, kafka_prefix, kafka_consumer_group, monkeypatch
 ):
-    replayer, src_objstorage = prepare_test(
+    client, src_objstorage = prepare_test(
         kafka_server, kafka_prefix, kafka_consumer_group
     )
-    dst_objstorage = get_objstorage(cls="memory")
-    dst_objstorage = FailingObjstorage(dst_objstorage)
+    objstorages["dst"] = FailingObjstorage(objstorages["dst"])
+    dst_objstorage = objstorages["dst"]
 
     q = Queue()
     monkeypatch.setattr(replay, "copy_object", copy_object_q(q))
     monkeypatch.setattr(replay.get_object.retry.stop, "max_attempt_number", 2)
 
-    worker_fn = functools.partial(
-        replay.process_replay_objects_content,
-        src=src_objstorage,
-        dst=dst_objstorage,
-    )
-    replayer.process(worker_fn)
+    with replay.ContentReplayer(
+        src={"cls": "mocked", "name": "src"},
+        dst={"cls": "mocked", "name": "dst"},
+    ) as replayer:
+        client.process(replayer.replay)
 
     # no object could be replicated
     assert dst_objstorage.storage.state == {}

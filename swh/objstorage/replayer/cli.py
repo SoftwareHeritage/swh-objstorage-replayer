@@ -1,4 +1,4 @@
-# Copyright (C) 2016-2022 The Software Heritage developers
+# Copyright (C) 2016-2023 The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
@@ -122,28 +122,21 @@ def content_replay(
           db: 1
 
     """
-    import functools
     import mmap
 
     from swh.journal.client import get_journal_client
     from swh.model.model import SHA1_SIZE
-    from swh.objstorage.factory import get_objstorage
-    from swh.objstorage.replayer.replay import (
-        is_hash_in_bytearray,
-        process_replay_objects_content,
-    )
+    from swh.objstorage.replayer.replay import ContentReplayer, is_hash_in_bytearray
 
     conf = ctx.obj["config"]
-    try:
-        objstorage_src = get_objstorage(**conf.pop("objstorage"))
-    except KeyError:
-        ctx.fail("You must have a source objstorage configured in " "your config file.")
-    try:
-        objstorage_dst = get_objstorage(**conf.pop("objstorage_dst"))
-    except KeyError:
+    if "objstorage" not in conf:
+        ctx.fail("You must have a source objstorage configured in your config file.")
+    if "objstorage_dst" not in conf:
         ctx.fail(
-            "You must have a destination objstorage configured " "in your config file."
+            "You must have a destination objstorage configured in your config file."
         )
+    objstorage_src_cfg = conf.pop("objstorage")
+    objstorage_dst_cfg = conf.pop("objstorage_dst")
 
     exclude_fns = []
     if exclude_sha1_file:
@@ -192,20 +185,17 @@ def content_replay(
         stop_after_objects=stop_after_objects,
         object_types=("content",),
     )
-    worker_fn = functools.partial(
-        process_replay_objects_content,
-        src=objstorage_src,
-        dst=objstorage_dst,
-        exclude_fn=exclude_fn,
-        check_dst=check_dst,
-        concurrency=concurrency,
-    )
-
-    if notify:
-        notify("READY=1")
-
     try:
-        client.process(worker_fn)
+        with ContentReplayer(
+            src=objstorage_src_cfg,
+            dst=objstorage_dst_cfg,
+            exclude_fn=exclude_fn,
+            check_dst=check_dst,
+            concurrency=concurrency,
+        ) as replayer:
+            if notify:
+                notify("READY=1")
+            client.process(replayer.replay)
     except KeyboardInterrupt:
         ctx.exit(0)
     else:

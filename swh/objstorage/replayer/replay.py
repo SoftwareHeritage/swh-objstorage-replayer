@@ -1,14 +1,14 @@
-# Copyright (C) 2019-2022 The Software Heritage developers
+# Copyright (C) 2019-2023 The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
 
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import wait as futures_wait
 import logging
+from queue import Empty, Queue
+from threading import Event, Thread
 from time import time
 from traceback import format_tb
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from humanize import naturaldelta, naturalsize
 import msgpack
@@ -31,8 +31,10 @@ from swh.core.statsd import statsd
 from swh.model.hashutil import hash_to_hex
 from swh.model.model import SHA1_SIZE
 from swh.objstorage.constants import ID_HASH_ALGO
-from swh.objstorage.exc import ObjNotFoundError
-from swh.objstorage.objstorage import ObjStorage
+from swh.objstorage.exc import Error, ObjNotFoundError
+
+# import the factory module is needed to make tests work (get_objstorage is patched)
+import swh.objstorage.factory as factory
 
 logger = logging.getLogger(__name__)
 REPORTER = None
@@ -225,122 +227,133 @@ def obj_in_objstorage(obj_id, dst):
         raise ReplayError(obj_id=obj_id, exc=exc) from None
 
 
-def process_replay_objects_content(
-    all_objects: Dict[str, List[dict]],
-    *,
-    src: ObjStorage,
-    dst: ObjStorage,
-    exclude_fn: Optional[Callable[[dict], bool]] = None,
-    check_dst: bool = True,
-    concurrency: int = 16,
-):
-    """
-    Takes a list of records from Kafka (see
-    :py:func:`swh.journal.client.JournalClient.process`) and copies them
-    from the `src` objstorage to the `dst` objstorage, if:
+class ContentReplayer:
+    def __init__(
+        self,
+        src: Dict[str, Any],
+        dst: Dict[str, Any],
+        exclude_fn: Optional[Callable[[dict], bool]] = None,
+        check_dst: bool = True,
+        check_obj: bool = False,
+        concurrency: int = 16,
+    ):
+        """Helper class that takes a list of records from Kafka (see
+        :py:func:`swh.journal.client.JournalClient.process`) and copies them
+        from the `src` objstorage to the `dst` objstorage, if:
 
-    * `obj['status']` is `'visible'`
-    * `exclude_fn(obj)` is `False` (if `exclude_fn` is provided)
-    * `obj['sha1'] not in dst` (if `check_dst` is True)
+        * `obj['status']` is `'visible'`
+        * `exclude_fn(obj)` is `False` (if `exclude_fn` is provided)
+        * `obj['sha1'] not in dst` (if `check_dst` is True)
 
-    Args:
-        all_objects: Objects passed by the Kafka client. Most importantly,
-            `all_objects['content'][*]['sha1']` is the sha1 hash of each
-            content.
-        src: An object storage (see :py:func:`swh.objstorage.get_objstorage`)
-        dst: An object storage (see :py:func:`swh.objstorage.get_objstorage`)
-        exclude_fn: Determines whether an object should be copied.
-        check_dst: Determines whether we should check the destination
-            objstorage before copying.
+        Args:
+            src: An object storage configuration dict (see
+                :py:func:`swh.objstorage.get_objstorage`)
+            dst: An object storage configuration dict (see
+                :py:func:`swh.objstorage.get_objstorage`)
+            exclude_fn: Determines whether an object should be copied.
+            check_dst: Determines whether we should check the destination
+                objstorage before copying.
+            check_obj: If check_dst is true, determines whether we should check
+                the existing object in the destination objstorage is valid; if not,
+                put the replayed object.
+            concurrency: Number of worker threads doing the replication process
+                (retrieve, check, store).
 
-    Example:
+        See swh/objstorage/replayer/tests/test_replay.py for usage examples.
+        """
+        self.src_cfg = src
+        self.dst_cfg = dst
+        self.exclude_fn = exclude_fn
+        self.check_dst = check_dst
+        self.check_obj = check_obj
+        self.concurrency = concurrency
+        self.obj_queue: Queue = Queue()
+        self.return_queue: Queue = Queue()
+        self.stop_event = Event()
+        self.workers = [Thread(target=self._worker) for i in range(self.concurrency)]
+        for w in self.workers:
+            w.start()
 
-    >>> import hashlib
-    >>> from swh.objstorage.factory import get_objstorage
-    >>> src = get_objstorage('memory')
-    >>> dst = get_objstorage('memory')
-    >>> cnt1 = b'foo bar'
-    >>> cnt2 = b'baz qux'
-    >>> id1 = hashlib.sha1(cnt1).digest()
-    >>> id2 = hashlib.sha1(cnt2).digest()
-    >>> src.add(b'foo bar', obj_id=id1)
-    >>> src.add(b'baz qux', obj_id=id2)
-    >>> kafka_partitions = {
-    ...     'content': [
-    ...         {
-    ...             'sha1': id1,
-    ...             'status': 'visible',
-    ...         },
-    ...         {
-    ...             'sha1': id2,
-    ...             'status': 'visible',
-    ...         },
-    ...     ]
-    ... }
-    >>> process_replay_objects_content(
-    ...     kafka_partitions, src=src, dst=dst,
-    ...     exclude_fn=lambda obj: obj['sha1'] == id1)
-    >>> id1 in dst
-    False
-    >>> id2 in dst
-    True
-    """
+    def __enter__(self):
+        return self
 
-    def _copy_object(obj):
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.stop()
+
+    def stop(self):
+        """Stop replayer's worker threads"""
+        self.stop_event.set()
+        for worker in self.workers:
+            worker.join()
+
+    def _copy_object(self, obj, src, dst):
         obj_id = obj[ID_HASH_ALGO]
         logger.debug("Starting copy object %s", hash_to_hex(obj_id))
+        decision = None
+        copied_bytes = 0
+        tags = {}
+
         if obj["status"] != "visible":
             logger.debug("skipped %s (status=%s)", hash_to_hex(obj_id), obj["status"])
-            statsd.increment(
-                CONTENT_OPERATIONS_METRIC,
-                tags={"decision": "skipped", "status": obj["status"]},
-            )
-            return "skipped", None
-        elif exclude_fn and exclude_fn(obj):
+            decision = "skipped"
+            tags["status"] = obj["status"]
+        elif self.exclude_fn and self.exclude_fn(obj):
             logger.debug("skipped %s (manually excluded)", hash_to_hex(obj_id))
-            statsd.increment(CONTENT_OPERATIONS_METRIC, tags={"decision": "excluded"})
-            return "excluded", None
-        elif check_dst and obj_in_objstorage(obj_id, dst):
-            logger.debug("skipped %s (in dst)", hash_to_hex(obj_id))
-            statsd.increment(CONTENT_OPERATIONS_METRIC, tags={"decision": "in_dst"})
-            return "in_dst", None
-        else:
+            decision = "excluded"
+        elif self.check_dst and obj_in_objstorage(obj_id, dst):
+            decision = "in_dst"
+            if self.check_obj:
+                try:
+                    dst.check(obj_id)
+                except Error:
+                    logger.info("invalid object found in dst %s", hash_to_hex(obj_id))
+                    decision = None
+                    tags["status"] = "invalid_in_dst"
+        if decision is None:
             try:
                 copied_bytes = copy_object(obj_id, src, dst)
             except ObjNotFoundError:
                 logger.debug("not found %s", hash_to_hex(obj_id))
-                statsd.increment(
-                    CONTENT_OPERATIONS_METRIC, tags={"decision": "not_in_src"}
-                )
-                return "not_found", None
+                decision = "not_found"
             except Exception as exc:
                 logger.info("failed %s (%r)", hash_to_hex(obj_id), exc)
-                statsd.increment(CONTENT_OPERATIONS_METRIC, tags={"decision": "failed"})
-                return "failed", None
+                decision = "failed"
             else:
                 if copied_bytes is None:
                     logger.debug("failed %s (None)", hash_to_hex(obj_id))
-                    statsd.increment(
-                        CONTENT_OPERATIONS_METRIC, tags={"decision": "failed"}
-                    )
-                    return "failed", None
+                    decision = "failed"
                 else:
                     logger.debug("copied %s (%d)", hash_to_hex(obj_id), copied_bytes)
-                    statsd.increment(
-                        CONTENT_OPERATIONS_METRIC, tags={"decision": "copied"}
-                    )
-                    return "copied", copied_bytes
-        logger.debug("failed %s (XXX)", hash_to_hex(obj_id))
-        return "failed", None
+                    decision = "copied"
+        tags["decision"] = decision
+        statsd.increment(CONTENT_OPERATIONS_METRIC, tags=tags)
+        return decision, copied_bytes
 
-    vol = 0
-    stats = dict.fromkeys(
-        ["skipped", "excluded", "not_found", "failed", "copied", "in_dst"], 0
-    )
-    t0 = time()
+    def _worker(self):
+        src = factory.get_objstorage(**self.src_cfg)
+        dst = factory.get_objstorage(**self.dst_cfg)
+        while not self.stop_event.is_set():
+            try:
+                obj = self.obj_queue.get(timeout=1)
+            except Empty:
+                continue
+            try:
+                decision, nbytes = self._copy_object(obj, src, dst)
+            except Exception as exc:
+                self.return_queue.put(("error", 0, exc))
+            else:
+                self.return_queue.put((decision, nbytes, None))
 
-    with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        futures = []
+    def replay(
+        self,
+        all_objects: Dict[str, List[dict]],
+    ):
+        vol = 0
+        stats = dict.fromkeys(
+            ["skipped", "excluded", "not_found", "failed", "copied", "in_dst"], 0
+        )
+        t0 = time()
+        nobjs = 0
         for (object_type, objects) in all_objects.items():
             if object_type != "content":
                 logger.warning(
@@ -348,39 +361,47 @@ def process_replay_objects_content(
                 )
                 continue
             for obj in objects:
-                futures.append(pool.submit(_copy_object, obj=obj))
-        logger.debug("Waiting for futures (%d)", len(futures))
-        futures_wait(futures)
-    logger.debug("Checking futures results")
-    for f in futures:
-        exc = f.exception()
-        if exc:
-            # XXX this should not happen, so it is probably wrong...
-            raise exc
-        else:
-            state, nbytes = f.result()
-            if nbytes is not None:
-                vol += nbytes
-            stats[state] += 1
+                self.obj_queue.put(obj)
+                nobjs += 1
 
-    dt = time() - t0
-    logger.info(
-        "processed %s content objects (%s) in %s "
-        "(%.1f obj/sec, %s/sec) "
-        "- %d copied - %d in dst - %d skipped "
-        "- %d excluded - %d not found - %d failed",
-        len(futures),
-        naturalsize(vol),
-        naturaldelta(dt),
-        len(futures) / dt,
-        naturalsize(vol / dt),
-        stats["copied"],
-        stats["in_dst"],
-        stats["skipped"],
-        stats["excluded"],
-        stats["not_found"],
-        stats["failed"],
-    )
+        logger.debug("Waiting for the obj queue to be processed")
+        results: List[Tuple[str, int, Optional[Exception]]] = []
+        while (not self.stop_event.is_set()) and (len(results) < nobjs):
+            try:
+                result = self.return_queue.get(timeout=1)
+            except Empty:
+                continue
+            else:
+                results.append(result)
 
-    if notify:
-        notify("WATCHDOG=1")
+        logger.debug("Checking results")
+        for decision, nbytes, exc in results:
+            if exc:
+                # XXX this should not happen, so it is probably wrong...
+                raise exc
+            else:
+                if nbytes is not None:
+                    vol += nbytes
+                stats[decision] += 1
+
+        dt = time() - t0
+        logger.info(
+            "processed %s content objects (%s) in %s "
+            "(%.1f obj/sec, %s/sec) "
+            "- %d copied - %d in dst - %d skipped "
+            "- %d excluded - %d not found - %d failed",
+            nobjs,
+            naturalsize(vol),
+            naturaldelta(dt),
+            nobjs / dt,
+            naturalsize(vol / dt),
+            stats["copied"],
+            stats["in_dst"],
+            stats["skipped"],
+            stats["excluded"],
+            stats["not_found"],
+            stats["failed"],
+        )
+
+        if notify:
+            notify("WATCHDOG=1")
