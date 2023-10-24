@@ -53,7 +53,7 @@ def test_replay_statsd(
     ]
 
     for content in contents:
-        src.add(content.data, obj_id=content.sha1)
+        src.add(content.data, obj_id=content.hashes())
         writer.write_addition("content", content)
     excluded = [c.sha1 for c in contents[2:4]]
 
@@ -61,7 +61,7 @@ def test_replay_statsd(
         return cnt_d["sha1"] in excluded
 
     for content in contents[4:6]:
-        dst.add(content.data, obj_id=content.sha1)
+        dst.add(content.data, obj_id=content.hashes())
 
     client = JournalClient(
         brokers=kafka_server,

@@ -5,15 +5,18 @@
 
 from collections import defaultdict
 from queue import Queue
+from typing import Tuple, cast
 
 from swh.journal.client import EofBehavior, JournalClient
 from swh.journal.writer import get_journal_writer
 from swh.model.model import Content
 from swh.objstorage import factory
 from swh.objstorage.exc import ObjNotFoundError
+from swh.objstorage.interface import CompositeObjId, ObjStorageInterface
 from swh.objstorage.multiplexer.filter.filter import ObjStorageFilter
 from swh.objstorage.replayer import replay
 from swh.objstorage.replayer.replay import copy_object  # needed for MonkeyPatch
+from swh.objstorage.replayer.replay import format_obj_id
 from swh.objstorage.replayer.tests.test_cli import (
     _patch_objstorages as patch_objstorages,
 )
@@ -30,24 +33,32 @@ class FailingObjstorage(ObjStorageFilter):
         self.rate = 3
 
     def get(self, obj_id, *args, **kwargs):
-        self.calls[obj_id] += 1
-        if (self.calls[obj_id] % self.rate) == 0:
+        self.calls[format_obj_id(obj_id)] += 1
+        if (self.calls[format_obj_id(obj_id)] % self.rate) == 0:
             return self.storage.get(obj_id, *args, **kwargs)
         raise Exception("Nope")
 
     def add(self, content, obj_id, check_presence=True, *args, **kwargs):
-        self.calls[obj_id] += 1
-        if (self.calls[obj_id] % self.rate) == 0:
+        self.calls[format_obj_id(obj_id)] += 1
+        if (self.calls[format_obj_id(obj_id)] % self.rate) == 0:
             return self.storage.add(content, obj_id, check_presence, *args, **kwargs)
         raise Exception("Nope")
+
+    def _state_key(self, obj_id):
+        return self.storage._state_key(obj_id)
 
 
 class NotFoundObjstorage(ObjStorageFilter):
     def get(self, obj_id, *args, **kwargs):
         raise ObjNotFoundError(obj_id)
 
+    def _state_key(self, obj_id):
+        return self.storage._state_key(obj_id)
 
-def prepare_test(kafka_server, kafka_prefix, kafka_consumer_group):
+
+def prepare_test(
+    kafka_server, kafka_prefix, kafka_consumer_group
+) -> Tuple[JournalClient, ObjStorageInterface]:
     src_objstorage = factory.get_objstorage(cls="mocked", name="src")
 
     writer = get_journal_writer(
@@ -59,7 +70,8 @@ def prepare_test(kafka_server, kafka_prefix, kafka_consumer_group):
     )
 
     for content in CONTENTS:
-        src_objstorage.add(content.data, obj_id=content.sha1)
+        assert content.data is not None
+        src_objstorage.add(content.data, obj_id=cast(CompositeObjId, content.hashes()))
         writer.write_addition("content", content)
 
     replayer = JournalClient(
@@ -108,21 +120,27 @@ def test_replay_content_with_transient_errors(
 
     # only content with status visible will be copied in storage2
     expected_objstorage_state = {
-        c.sha1: c.data for c in CONTENTS if c.status == "visible"
+        dst_objstorage._state_key(c.hashes()): c.with_data().data
+        for c in CONTENTS
+        if c.status == "visible"
     }
     assert expected_objstorage_state == dst_objstorage.state
 
     stats = [q.get_nowait() for i in range(q.qsize())]
-    for obj_id in expected_objstorage_state:
+    for state_key in expected_objstorage_state:
         put = next(
-            stat for (meth, oid, stat) in stats if oid == obj_id and meth == "put"
+            stat
+            for (meth, oid, stat) in stats
+            if dst_objstorage._state_key(oid) == state_key and meth == "put"
         )
         assert put.get("attempt_number") == 1
         assert put.get("start_time") > 0
         assert put.get("idle_for") == 0
 
         get = next(
-            stat for (meth, oid, stat) in stats if oid == obj_id and meth == "get"
+            stat
+            for (meth, oid, stat) in stats
+            if dst_objstorage._state_key(oid) == state_key and meth == "get"
         )
         assert get.get("attempt_number") == 3
         assert get.get("start_time") > 0
@@ -158,7 +176,7 @@ def test_replay_content_with_errors(
         if obj.status != "visible":
             continue
 
-        obj_id = obj.sha1
+        obj_id = obj.hashes()
         put = next(
             stat for (meth, oid, stat) in stats if oid == obj_id and meth == "put"
         )
@@ -200,7 +218,7 @@ def test_replay_content_not_found(
         if obj.status != "visible":
             continue
 
-        obj_id = obj.sha1
+        obj_id = obj.hashes()
         put = next(
             stat for (meth, oid, stat) in stats if oid == obj_id and meth == "put"
         )
@@ -236,14 +254,18 @@ def test_replay_content_with_transient_add_errors(
 
     # only content with status visible will be copied in storage2
     expected_objstorage_state = {
-        c.sha1: c.data for c in CONTENTS if c.status == "visible"
+        dst_objstorage._state_key(c.hashes()): c.data
+        for c in CONTENTS
+        if c.status == "visible"
     }
     assert expected_objstorage_state == dst_objstorage.storage.state
 
     stats = [q.get_nowait() for i in range(q.qsize())]
-    for obj_id in expected_objstorage_state:
+    for state_key in expected_objstorage_state:
         put = next(
-            stat for (meth, oid, stat) in stats if oid == obj_id and meth == "put"
+            stat
+            for (meth, oid, stat) in stats
+            if dst_objstorage._state_key(oid) == state_key and meth == "put"
         )
         assert put.get("attempt_number") == 3
         assert put.get("start_time") > 0
@@ -251,7 +273,9 @@ def test_replay_content_with_transient_add_errors(
         assert put.get("delay_since_first_attempt") > 0
 
         get = next(
-            stat for (meth, oid, stat) in stats if oid == obj_id and meth == "get"
+            stat
+            for (meth, oid, stat) in stats
+            if dst_objstorage._state_key(oid) == state_key and meth == "get"
         )
         assert get.get("attempt_number") == 1
         assert get.get("start_time") > 0
@@ -286,7 +310,7 @@ def test_replay_content_with_add_errors(
         if obj.status != "visible":
             continue
 
-        obj_id = obj.sha1
+        obj_id = obj.hashes()
         put = next(
             stat for (meth, oid, stat) in stats if oid == obj_id and meth == "put"
         )
