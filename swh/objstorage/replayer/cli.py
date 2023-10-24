@@ -6,6 +6,7 @@
 # WARNING: do not import unnecessary things here to keep cli startup time under
 # control
 import logging
+from typing import Any, Callable, Dict, List, Optional
 
 import click
 
@@ -53,7 +54,7 @@ from swh.objstorage.cli import objstorage_cli_group
 @click.pass_context
 def content_replay(
     ctx, stop_after_objects, exclude_sha1_file, size_limit, check_dst, concurrency
-):
+) -> None:
     """Fill a destination Object Storage using a journal stream.
 
     This is typically used for a mirror configuration, by reading a Journal
@@ -138,7 +139,7 @@ def content_replay(
     objstorage_src_cfg = conf.pop("objstorage")
     objstorage_dst_cfg = conf.pop("objstorage_dst")
 
-    exclude_fns = []
+    exclude_fns: List[Callable[[Dict[str, Any]], bool]] = []
     if exclude_sha1_file:
         map_ = mmap.mmap(exclude_sha1_file.fileno(), 0, prot=mmap.PROT_READ)
         if map_.size() % SHA1_SIZE != 0:
@@ -146,7 +147,7 @@ def content_replay(
                 "--exclude-sha1 must link to a file whose size is an "
                 "exact multiple of %d bytes." % SHA1_SIZE
             )
-        if hasattr(map_, "madvise"):
+        if hasattr(map_, "madvise") and hasattr(mmap, "MADV_RANDOM"):
             # Python >= 3.8
             # Tells the kernel not to perform lookahead reads, which we are unlikely
             # to benefit from.
@@ -165,16 +166,14 @@ def content_replay(
 
         exclude_fns.append(exclude_by_size)
 
+    exclude_fn: Optional[Callable[[Dict[str, Any]], bool]] = None
     if exclude_fns:
 
-        def exclude_fn(obj):
+        def exclude_fn(obj: Dict[str, Any]) -> bool:
             for fn in exclude_fns:
                 if fn(obj):
                     return True
             return False
-
-    else:
-        exclude_fn = None
 
     journal_cfg = conf.pop("journal_client")
     replayer_cfg = conf.pop("replayer", {})

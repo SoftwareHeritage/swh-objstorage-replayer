@@ -37,7 +37,7 @@ from swh.objstorage.exc import Error, ObjNotFoundError
 import swh.objstorage.factory as factory
 
 logger = logging.getLogger(__name__)
-REPORTER = None
+REPORTER: Optional[Callable[[str, bytes], Any]] = None
 
 CONTENT_OPERATIONS_METRIC = "swh_content_replayer_operations_total"
 CONTENT_RETRY_METRIC = "swh_content_replayer_retries_total"
