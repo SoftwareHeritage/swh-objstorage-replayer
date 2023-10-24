@@ -7,7 +7,7 @@ import re
 
 import pytest
 
-from swh.journal.client import JournalClient
+from swh.journal.client import EofBehavior, JournalClient
 from swh.journal.writer import get_journal_writer
 from swh.model.model import Content
 from swh.objstorage.replayer import replay
@@ -67,7 +67,7 @@ def test_replay_statsd(
         brokers=kafka_server,
         group_id=kafka_consumer_group,
         prefix=kafka_prefix,
-        stop_on_eof=True,
+        on_eof=EofBehavior.STOP,
     )
 
     with ContentReplayer(

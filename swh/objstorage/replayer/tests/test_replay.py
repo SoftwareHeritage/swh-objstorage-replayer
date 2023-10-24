@@ -8,7 +8,7 @@ import hashlib
 from hypothesis import given, settings
 from hypothesis.strategies import sets
 
-from swh.journal.client import JournalClient
+from swh.journal.client import EofBehavior, JournalClient
 from swh.journal.writer import get_journal_writer
 from swh.model.hypothesis_strategies import sha1
 from swh.model.model import Content
@@ -57,8 +57,7 @@ def test_replay_content(objstorages, kafka_server, kafka_prefix, kafka_consumer_
         brokers=kafka_server,
         group_id=kafka_consumer_group,
         prefix=kafka_prefix,
-        stop_on_eof=True,
-        # stop_after_objects=len(objects),
+        on_eof=EofBehavior.STOP,
     )
 
     with ContentReplayer(

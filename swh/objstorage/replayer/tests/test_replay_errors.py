@@ -6,7 +6,7 @@
 from collections import defaultdict
 from queue import Queue
 
-from swh.journal.client import JournalClient
+from swh.journal.client import EofBehavior, JournalClient
 from swh.journal.writer import get_journal_writer
 from swh.model.model import Content
 from swh.objstorage import factory
@@ -66,7 +66,7 @@ def prepare_test(kafka_server, kafka_prefix, kafka_consumer_group):
         brokers=kafka_server,
         group_id=kafka_consumer_group,
         prefix=kafka_prefix,
-        stop_on_eof=True,
+        on_eof=EofBehavior.STOP,
     )
 
     return replayer, src_objstorage
