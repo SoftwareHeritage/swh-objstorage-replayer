@@ -7,7 +7,7 @@ CONTRIBUTORS
 LICENSE
 MANIFEST.in
 Makefile
-README.md
+README.rst
 mypy.ini
 pyproject.toml
 pytest.ini
@@ -39,4 +39,5 @@ swh/objstorage/replayer/replay.py
 swh/objstorage/replayer/tests/__init__.py
 swh/objstorage/replayer/tests/test_cli.py
 swh/objstorage/replayer/tests/test_replay.py
+swh/objstorage/replayer/tests/test_replay_errors.py
 swh/objstorage/replayer/tests/test_statsd.py

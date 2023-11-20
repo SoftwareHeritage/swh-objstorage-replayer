@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (C) 2019-2020  The Software Heritage developers
+# Copyright (C) 2019-2023  The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
@@ -12,7 +12,7 @@ from setuptools import find_packages, setup
 here = path.abspath(path.dirname(__file__))
 
 # Get the long description from the README file
-with open(path.join(here, "README.md"), encoding="utf-8") as f:
+with open(path.join(here, "README.rst"), encoding="utf-8") as f:
     long_description = f.read()
 
 
@@ -35,18 +35,16 @@ def parse_requirements(name=None):
     return requirements
 
 
-# Edit this part to match your module.
-# Full sample:
-#   https://forge.softwareheritage.org/diffusion/DCORE/browse/master/setup.py
+GITLAB_URL = "https://gitlab.softwareheritage.org/swh/devel/swh-objstorage-replayer"
 setup(
-    name="swh.objstorage.replayer",  # example: swh.loader.pypi
+    name="swh.objstorage.replayer",
     description="Software Heritage content replayer",
     long_description=long_description,
-    long_description_content_type="text/markdown",
+    long_description_content_type="text/x-rst",
     python_requires=">=3.7",
     author="Software Heritage developers",
     author_email="swh-devel@inria.fr",
-    url="https://forge.softwareheritage.org/diffusion/swh-objstorage-replayer",
+    url=GITLAB_URL,
     packages=find_packages(),  # packages's modules
     install_requires=parse_requirements() + parse_requirements("swh"),
     tests_require=parse_requirements("test"),
@@ -63,11 +61,11 @@ setup(
         "Intended Audience :: Developers",
         "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
         "Operating System :: OS Independent",
-        "Development Status :: 3 - Alpha",
+        "Development Status :: 5 - Production/Stable",
     ],
     project_urls={
-        "Bug Reports": "https://forge.softwareheritage.org/maniphest",
+        "Bug Reports": f"{GITLAB_URL}/-/issue",
         "Funding": "https://www.softwareheritage.org/donate",
-        "Source": "https://forge.softwareheritage.org/source/swh-objstorage-replayer",
+        "Source": f"{GITLAB_URL}.git",
     },
 )

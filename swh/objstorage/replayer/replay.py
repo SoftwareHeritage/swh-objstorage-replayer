@@ -1,14 +1,16 @@
-# Copyright (C) 2019-2020 The Software Heritage developers
+# Copyright (C) 2019-2023 The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
 
-from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor
-from concurrent.futures import wait as futures_wait
 import logging
+from queue import Empty, Queue
+from threading import Event, Thread
 from time import time
-from typing import Callable, Dict, List, Optional
+from traceback import format_tb
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from humanize import naturaldelta, naturalsize
 import msgpack
 from sentry_sdk import capture_exception, push_scope
 
@@ -28,7 +30,11 @@ from tenacity.retry import retry_base
 from swh.core.statsd import statsd
 from swh.model.hashutil import hash_to_hex
 from swh.model.model import SHA1_SIZE
-from swh.objstorage.objstorage import ID_HASH_ALGO, ObjNotFoundError, ObjStorage
+from swh.objstorage.constants import ID_HASH_ALGO
+from swh.objstorage.exc import Error, ObjNotFoundError
+
+# import the factory module is needed to make tests work (get_objstorage is patched)
+import swh.objstorage.factory as factory
 
 logger = logging.getLogger(__name__)
 REPORTER = None
@@ -95,7 +101,11 @@ class ReplayError(Exception):
         self.exc = exc
 
     def __str__(self):
-        return "ReplayError(%s, %s)" % (self.obj_id, self.exc)
+        return "ReplayError(%s, %r, %s)" % (
+            self.obj_id,
+            self.exc,
+            format_tb(self.exc.__traceback__),
+        )
 
 
 def log_replay_retry(retry_state, sleep=None, last_result=None):
@@ -120,13 +130,13 @@ def log_replay_error(retry_state):
     error_context = {
         "obj_id": exc.obj_id,
         "operation": retry_state.fn.__name__,
-        "exc": str(exc.exc),
+        "exc": str(exc),
         "retries": retry_state.attempt_number,
     }
 
     logger.error(
         "Failed operation %(operation)s on %(obj_id)s after %(retries)s"
-        " retries: %(exc)s",
+        " retries; last exception: %(exc)s",
         error_context,
     )
 
@@ -136,7 +146,7 @@ def log_replay_error(retry_state):
         msg = msgpack.dumps(error_context)
         REPORTER(oid, msg)
 
-    return None
+    raise exc
 
 
 CONTENT_REPLAY_RETRIES = 3
@@ -186,10 +196,16 @@ def get_object(objstorage, obj_id):
 @content_replay_retry
 def put_object(objstorage, obj_id, obj):
     try:
+        logger.debug("putting %(obj_id)s", {"obj_id": hash_to_hex(obj_id)})
         with statsd.timed(CONTENT_DURATION_METRIC, tags={"request": "put"}):
+            logger.debug("storing %(obj_id)s", {"obj_id": hash_to_hex(obj_id)})
             objstorage.add(obj, obj_id, check_presence=False)
             logger.debug("stored %(obj_id)s", {"obj_id": hash_to_hex(obj_id)})
     except Exception as exc:
+        logger.error(
+            "putting %(obj_id)s failed: %(exc)r",
+            {"obj_id": hash_to_hex(obj_id), "exc": exc},
+        )
         raise ReplayError(obj_id=obj_id, exc=exc) from None
 
 
@@ -211,108 +227,133 @@ def obj_in_objstorage(obj_id, dst):
         raise ReplayError(obj_id=obj_id, exc=exc) from None
 
 
-def process_replay_objects_content(
-    all_objects: Dict[str, List[dict]],
-    *,
-    src: ObjStorage,
-    dst: ObjStorage,
-    exclude_fn: Optional[Callable[[dict], bool]] = None,
-    check_dst: bool = True,
-    concurrency: int = 16,
-):
-    """
-    Takes a list of records from Kafka (see
-    :py:func:`swh.journal.client.JournalClient.process`) and copies them
-    from the `src` objstorage to the `dst` objstorage, if:
+class ContentReplayer:
+    def __init__(
+        self,
+        src: Dict[str, Any],
+        dst: Dict[str, Any],
+        exclude_fn: Optional[Callable[[dict], bool]] = None,
+        check_dst: bool = True,
+        check_obj: bool = False,
+        concurrency: int = 16,
+    ):
+        """Helper class that takes a list of records from Kafka (see
+        :py:func:`swh.journal.client.JournalClient.process`) and copies them
+        from the `src` objstorage to the `dst` objstorage, if:
 
-    * `obj['status']` is `'visible'`
-    * `exclude_fn(obj)` is `False` (if `exclude_fn` is provided)
-    * `obj['sha1'] not in dst` (if `check_dst` is True)
+        * `obj['status']` is `'visible'`
+        * `exclude_fn(obj)` is `False` (if `exclude_fn` is provided)
+        * `obj['sha1'] not in dst` (if `check_dst` is True)
 
-    Args:
-        all_objects: Objects passed by the Kafka client. Most importantly,
-            `all_objects['content'][*]['sha1']` is the sha1 hash of each
-            content.
-        src: An object storage (see :py:func:`swh.objstorage.get_objstorage`)
-        dst: An object storage (see :py:func:`swh.objstorage.get_objstorage`)
-        exclude_fn: Determines whether an object should be copied.
-        check_dst: Determines whether we should check the destination
-            objstorage before copying.
+        Args:
+            src: An object storage configuration dict (see
+                :py:func:`swh.objstorage.get_objstorage`)
+            dst: An object storage configuration dict (see
+                :py:func:`swh.objstorage.get_objstorage`)
+            exclude_fn: Determines whether an object should be copied.
+            check_dst: Determines whether we should check the destination
+                objstorage before copying.
+            check_obj: If check_dst is true, determines whether we should check
+                the existing object in the destination objstorage is valid; if not,
+                put the replayed object.
+            concurrency: Number of worker threads doing the replication process
+                (retrieve, check, store).
 
-    Example:
+        See swh/objstorage/replayer/tests/test_replay.py for usage examples.
+        """
+        self.src_cfg = src
+        self.dst_cfg = dst
+        self.exclude_fn = exclude_fn
+        self.check_dst = check_dst
+        self.check_obj = check_obj
+        self.concurrency = concurrency
+        self.obj_queue: Queue = Queue()
+        self.return_queue: Queue = Queue()
+        self.stop_event = Event()
+        self.workers = [Thread(target=self._worker) for i in range(self.concurrency)]
+        for w in self.workers:
+            w.start()
 
-    >>> from swh.objstorage.factory import get_objstorage
-    >>> src = get_objstorage('memory')
-    >>> dst = get_objstorage('memory')
-    >>> id1 = src.add(b'foo bar')
-    >>> id2 = src.add(b'baz qux')
-    >>> kafka_partitions = {
-    ...     'content': [
-    ...         {
-    ...             'sha1': id1,
-    ...             'status': 'visible',
-    ...         },
-    ...         {
-    ...             'sha1': id2,
-    ...             'status': 'visible',
-    ...         },
-    ...     ]
-    ... }
-    >>> process_replay_objects_content(
-    ...     kafka_partitions, src=src, dst=dst,
-    ...     exclude_fn=lambda obj: obj['sha1'] == id1)
-    >>> id1 in dst
-    False
-    >>> id2 in dst
-    True
-    """
-    vol = []
-    nb_skipped = 0
-    nb_failures = 0
-    t0 = time()
+    def __enter__(self):
+        return self
 
-    def _copy_object(obj):
-        nonlocal nb_skipped
-        nonlocal nb_failures
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.stop()
 
+    def stop(self):
+        """Stop replayer's worker threads"""
+        self.stop_event.set()
+        for worker in self.workers:
+            worker.join()
+
+    def _copy_object(self, obj, src, dst):
         obj_id = obj[ID_HASH_ALGO]
-        if obj["status"] != "visible":
-            nb_skipped += 1
-            logger.debug("skipped %s (status=%s)", hash_to_hex(obj_id), obj["status"])
-            statsd.increment(
-                CONTENT_OPERATIONS_METRIC,
-                tags={"decision": "skipped", "status": obj["status"]},
-            )
-        elif exclude_fn and exclude_fn(obj):
-            nb_skipped += 1
-            logger.debug("skipped %s (manually excluded)", hash_to_hex(obj_id))
-            statsd.increment(CONTENT_OPERATIONS_METRIC, tags={"decision": "excluded"})
-        elif check_dst and obj_in_objstorage(obj_id, dst):
-            nb_skipped += 1
-            logger.debug("skipped %s (in dst)", hash_to_hex(obj_id))
-            statsd.increment(CONTENT_OPERATIONS_METRIC, tags={"decision": "in_dst"})
-        else:
-            try:
-                copied = copy_object(obj_id, src, dst)
-            except ObjNotFoundError:
-                nb_skipped += 1
-                statsd.increment(
-                    CONTENT_OPERATIONS_METRIC, tags={"decision": "not_in_src"}
-                )
-            else:
-                if copied is None:
-                    nb_failures += 1
-                    statsd.increment(
-                        CONTENT_OPERATIONS_METRIC, tags={"decision": "failed"}
-                    )
-                else:
-                    vol.append(copied)
-                    statsd.increment(
-                        CONTENT_OPERATIONS_METRIC, tags={"decision": "copied"}
-                    )
+        logger.debug("Starting copy object %s", hash_to_hex(obj_id))
+        decision = None
+        copied_bytes = 0
+        tags = {}
 
-    with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        futures = []
+        if obj["status"] != "visible":
+            logger.debug("skipped %s (status=%s)", hash_to_hex(obj_id), obj["status"])
+            decision = "skipped"
+            tags["status"] = obj["status"]
+        elif self.exclude_fn and self.exclude_fn(obj):
+            logger.debug("skipped %s (manually excluded)", hash_to_hex(obj_id))
+            decision = "excluded"
+        elif self.check_dst and obj_in_objstorage(obj_id, dst):
+            decision = "in_dst"
+            if self.check_obj:
+                try:
+                    dst.check(obj_id)
+                except Error:
+                    logger.info("invalid object found in dst %s", hash_to_hex(obj_id))
+                    decision = None
+                    tags["status"] = "invalid_in_dst"
+        if decision is None:
+            try:
+                copied_bytes = copy_object(obj_id, src, dst)
+            except ObjNotFoundError:
+                logger.debug("not found %s", hash_to_hex(obj_id))
+                decision = "not_found"
+            except Exception as exc:
+                logger.info("failed %s (%r)", hash_to_hex(obj_id), exc)
+                decision = "failed"
+            else:
+                if copied_bytes is None:
+                    logger.debug("failed %s (None)", hash_to_hex(obj_id))
+                    decision = "failed"
+                else:
+                    logger.debug("copied %s (%d)", hash_to_hex(obj_id), copied_bytes)
+                    decision = "copied"
+        tags["decision"] = decision
+        statsd.increment(CONTENT_OPERATIONS_METRIC, tags=tags)
+        return decision, copied_bytes
+
+    def _worker(self):
+        src = factory.get_objstorage(**self.src_cfg)
+        dst = factory.get_objstorage(**self.dst_cfg)
+        while not self.stop_event.is_set():
+            try:
+                obj = self.obj_queue.get(timeout=1)
+            except Empty:
+                continue
+            try:
+                decision, nbytes = self._copy_object(obj, src, dst)
+            except Exception as exc:
+                self.return_queue.put(("error", 0, exc))
+            else:
+                self.return_queue.put((decision, nbytes, None))
+
+    def replay(
+        self,
+        all_objects: Dict[str, List[dict]],
+    ):
+        vol = 0
+        stats = dict.fromkeys(
+            ["skipped", "excluded", "not_found", "failed", "copied", "in_dst"], 0
+        )
+        t0 = time()
+        nobjs = 0
         for (object_type, objects) in all_objects.items():
             if object_type != "content":
                 logger.warning(
@@ -320,29 +361,47 @@ def process_replay_objects_content(
                 )
                 continue
             for obj in objects:
-                futures.append(pool.submit(_copy_object, obj=obj))
+                self.obj_queue.put(obj)
+                nobjs += 1
 
-    futures_wait(futures, return_when=FIRST_EXCEPTION)
-    for f in futures:
-        if f.running():
-            continue
-        exc = f.exception()
-        if exc:
-            pool.shutdown(wait=False)
-            f.result()
-            raise exc
+        logger.debug("Waiting for the obj queue to be processed")
+        results: List[Tuple[str, int, Optional[Exception]]] = []
+        while (not self.stop_event.is_set()) and (len(results) < nobjs):
+            try:
+                result = self.return_queue.get(timeout=1)
+            except Empty:
+                continue
+            else:
+                results.append(result)
 
-    dt = time() - t0
-    logger.info(
-        "processed %s content objects in %.1fsec "
-        "(%.1f obj/sec, %.1fMB/sec) - %d failed - %d skipped",
-        len(vol),
-        dt,
-        len(vol) / dt,
-        sum(vol) / 1024 / 1024 / dt,
-        nb_failures,
-        nb_skipped,
-    )
+        logger.debug("Checking results")
+        for decision, nbytes, exc in results:
+            if exc:
+                # XXX this should not happen, so it is probably wrong...
+                raise exc
+            else:
+                if nbytes is not None:
+                    vol += nbytes
+                stats[decision] += 1
 
-    if notify:
-        notify("WATCHDOG=1")
+        dt = time() - t0
+        logger.info(
+            "processed %s content objects (%s) in %s "
+            "(%.1f obj/sec, %s/sec) "
+            "- %d copied - %d in dst - %d skipped "
+            "- %d excluded - %d not found - %d failed",
+            nobjs,
+            naturalsize(vol),
+            naturaldelta(dt),
+            nobjs / dt,
+            naturalsize(vol / dt),
+            stats["copied"],
+            stats["in_dst"],
+            stats["skipped"],
+            stats["excluded"],
+            stats["not_found"],
+            stats["failed"],
+        )
+
+        if notify:
+            notify("WATCHDOG=1")

@@ -1,4 +1,4 @@
-# Copyright (C) 2019-2022  The Software Heritage developers
+# Copyright (C) 2019-2023  The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
@@ -10,7 +10,7 @@ import logging
 import re
 from subprocess import Popen
 import tempfile
-from typing import Tuple
+from typing import Any, Dict, Optional, Tuple
 from unittest.mock import patch
 
 from click.testing import CliRunner
@@ -112,7 +112,7 @@ def _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorage):
 
     contents = {}
     for i in range(NUM_CONTENTS):
-        content = b"\x00" * 19 + bytes([i])
+        content = b"\x00" * i + bytes([i])
         sha1 = MultiHash(["sha1"]).from_data(content).digest()["sha1"]
         objstorage.add(content=content, obj_id=sha1)
         contents[sha1] = content
@@ -122,6 +122,7 @@ def _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorage):
             value=key_to_kafka(
                 {
                     "sha1": sha1,
+                    "length": len(content),
                     "status": "visible",
                 }
             ),
@@ -182,7 +183,7 @@ def test_replay_content_structured_log(
 
     caplog.set_level(logging.DEBUG, "swh.objstorage.replayer.replay")
 
-    expected_obj_ids = set(hash_to_hex(sha1) for sha1 in contents)
+    expected_obj_ids = {hash_to_hex(sha1) for sha1 in contents}
 
     result = invoke(
         "replay",
@@ -246,16 +247,19 @@ def test_replay_content_static_group_id(
     assert result.exit_code == 0, result.output
     assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
 
-    consumer_settings = None
+    consumer_settings: Optional[Dict[str, Any]] = None
     for record in caplog.records:
         if "Consumer settings" in record.message:
-            consumer_settings = record.args
-            break
+            consumer_settings = {}
+        elif consumer_settings is not None and len(record.args) == 2:
+            key, value = record.args
+            consumer_settings[key] = value
 
     assert consumer_settings is not None, (
         "Failed to get consumer settings out of the consumer log. "
         "See log capture for details."
     )
+
     assert consumer_settings["group.instance.id"] == "static-group-instance-id"
     assert consumer_settings["session.timeout.ms"] == 60 * 10 * 1000
     assert consumer_settings["max.poll.interval.ms"] == 90 * 10 * 1000
@@ -266,7 +270,7 @@ def test_replay_content_static_group_id(
 
 
 @_patch_objstorages(["src", "dst"])
-def test_replay_content_exclude(
+def test_replay_content_exclude_by_hash(
     objstorages,
     kafka_prefix: str,
     kafka_consumer_group: str,
@@ -274,7 +278,7 @@ def test_replay_content_exclude(
 ):
     """Check the content replayer in normal conditions
 
-    with a exclusion file (--exclude-sha1-file)
+    with an exclusion file (--exclude-sha1-file)
     """
 
     contents = _fill_objstorage_and_kafka(
@@ -306,6 +310,98 @@ def test_replay_content_exclude(
 
     for (sha1, content) in contents.items():
         if sha1 in excluded_contents:
+            assert sha1 not in objstorages["dst"], sha1
+        else:
+            assert sha1 in objstorages["dst"], sha1
+            assert objstorages["dst"].get(sha1) == content
+
+
+@_patch_objstorages(["src", "dst"])
+def test_replay_content_exclude_by_size(
+    objstorages,
+    kafka_prefix: str,
+    kafka_consumer_group: str,
+    kafka_server: Tuple[Popen, int],
+):
+    """Check the content replayer in normal conditions
+
+    with a size limit (--size-limit)
+    """
+
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
+
+    result = invoke(
+        "replay",
+        "--stop-after-objects",
+        str(NUM_CONTENTS),
+        "--size-limit",
+        5,
+        journal_client={
+            "cls": "kafka",
+            "brokers": kafka_server,
+            "group_id": kafka_consumer_group,
+            "prefix": kafka_prefix,
+        },
+    )
+    expected = r"Done.\n"
+    assert result.exit_code == 0, result.output
+    assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
+    assert [c for c in contents.values() if len(c) > 5]
+    assert [c for c in contents.values() if len(c) <= 5]
+    for (sha1, content) in contents.items():
+        if len(content) > 5:
+            assert sha1 not in objstorages["dst"], sha1
+        else:
+            assert sha1 in objstorages["dst"], sha1
+            assert objstorages["dst"].get(sha1) == content
+
+
+@_patch_objstorages(["src", "dst"])
+def test_replay_content_exclude_by_both(
+    objstorages,
+    kafka_prefix: str,
+    kafka_consumer_group: str,
+    kafka_server: Tuple[Popen, int],
+):
+    """Check the content replayer in normal conditions
+
+    with both an exclusion file (--exclude-sha1-file) and a size limit (--size-limit)
+    """
+
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"]
+    )
+    excluded_contents = list(contents)[0::2]  # picking half of them
+    with tempfile.NamedTemporaryFile(mode="w+b") as fd:
+        fd.write(b"".join(sorted(excluded_contents)))
+
+        fd.seek(0)
+
+        result = invoke(
+            "replay",
+            "--stop-after-objects",
+            str(NUM_CONTENTS),
+            "--size-limit",
+            5,
+            "--exclude-sha1-file",
+            fd.name,
+            journal_client={
+                "cls": "kafka",
+                "brokers": kafka_server,
+                "group_id": kafka_consumer_group,
+                "prefix": kafka_prefix,
+            },
+        )
+    expected = r"Done.\n"
+    assert result.exit_code == 0, result.output
+    assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
+
+    for (sha1, content) in contents.items():
+        if len(content) > 5:
+            assert sha1 not in objstorages["dst"], sha1
+        elif sha1 in excluded_contents:
             assert sha1 not in objstorages["dst"], sha1
         else:
             assert sha1 in objstorages["dst"], sha1
@@ -369,22 +465,29 @@ def test_replay_content_check_dst(
     assert result.exit_code == 0, result.output
     assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
 
-    retrieved = 0
-    stored = 0
-    in_dst = 0
+    stats = dict.fromkeys(
+        ["tot", "copied", "in_dst", "skipped", "excluded", "not_found", "failed"], 0
+    )
+    reg = re.compile(
+        r"processed (?P<tot>\d+) content objects .*"
+        r" *- (?P<copied>\d+) copied"
+        r" *- (?P<in_dst>\d+) in dst"
+        r" *- (?P<skipped>\d+) skipped"
+        r" *- (?P<excluded>\d+) excluded"
+        r" *- (?P<not_found>\d+) not found"
+        r" *- (?P<failed>\d+) failed"
+    )
     for record in caplog.records:
         logtext = record.getMessage()
-        if "retrieved" in logtext:
-            retrieved += 1
-        elif "stored" in logtext:
-            stored += 1
-        elif "in dst" in logtext:
-            in_dst += 1
+        m = reg.match(logtext)
+        if m:
+            for k, v in m.groupdict().items():
+                stats[k] += int(v)
+
+    assert stats["tot"] == sum(v for k, v in stats.items() if k != "tot")
 
     assert (
-        retrieved == expected_copied
-        and stored == expected_copied
-        and in_dst == expected_in_dst
+        stats["copied"] == expected_copied and stats["in_dst"] == expected_in_dst
     ), "Unexpected amount of objects copied, see the captured log for details"
 
     for (sha1, content) in contents.items():

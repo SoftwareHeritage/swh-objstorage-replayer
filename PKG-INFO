@@ -1,26 +1,38 @@
 Metadata-Version: 2.1
 Name: swh.objstorage.replayer
-Version: 1.1.0
+Version: 1.4.2
 Summary: Software Heritage content replayer
-Home-page: https://forge.softwareheritage.org/diffusion/swh-objstorage-replayer
+Home-page: https://gitlab.softwareheritage.org/swh/devel/swh-objstorage-replayer
 Author: Software Heritage developers
 Author-email: swh-devel@inria.fr
-Project-URL: Bug Reports, https://forge.softwareheritage.org/maniphest
+Project-URL: Bug Reports, https://gitlab.softwareheritage.org/swh/devel/swh-objstorage-replayer/-/issue
 Project-URL: Funding, https://www.softwareheritage.org/donate
-Project-URL: Source, https://forge.softwareheritage.org/source/swh-objstorage-replayer
+Project-URL: Source, https://gitlab.softwareheritage.org/swh/devel/swh-objstorage-replayer.git
 Classifier: Programming Language :: Python :: 3
 Classifier: Intended Audience :: Developers
 Classifier: License :: OSI Approved :: GNU General Public License v3 (GPLv3)
 Classifier: Operating System :: OS Independent
-Classifier: Development Status :: 3 - Alpha
+Classifier: Development Status :: 5 - Production/Stable
 Requires-Python: >=3.7
-Description-Content-Type: text/markdown
-Provides-Extra: testing
+Description-Content-Type: text/x-rst
 License-File: LICENSE
 License-File: AUTHORS
+Requires-Dist: humanize
+Requires-Dist: redis
+Requires-Dist: tenacity
+Requires-Dist: swh.core[http]>=0.3
+Requires-Dist: swh.objstorage>=0.2.2
+Requires-Dist: swh.journal>=0.4.2
+Provides-Extra: testing
+Requires-Dist: pytest; extra == "testing"
+Requires-Dist: pytest-redis; extra == "testing"
+Requires-Dist: swh.core[testing]; extra == "testing"
+Requires-Dist: types-pyyaml; extra == "testing"
+Requires-Dist: types-redis; extra == "testing"
 
-swh-objstorage-replayer
-=======================
+Software Heritage - Object storage replayer
+===========================================
 
-Simple command line tool to replicate content objects from a source Object storage to a
-destination one by listening the `content` topic of a `swh.journal` kafka stream.
+Simple command line tool to replicate content objects from a source object
+storage to a destination one by listening the ``content`` topic of a
+``swh.journal`` kafka stream.

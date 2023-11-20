@@ -1,4 +1,4 @@
-# Copyright (C) 2016-2022 The Software Heritage developers
+# Copyright (C) 2016-2023 The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
@@ -32,6 +32,12 @@ from swh.objstorage.cli import objstorage_cli_group
     help="File containing a sorted array of hashes to be excluded.",
 )
 @click.option(
+    "--size-limit",
+    default=0,
+    type=int,
+    help="Exclude files which size is over this limit. 0 (default) means no size limit.",
+)
+@click.option(
     "--check-dst/--no-check-dst",
     default=True,
     help="Check whether the destination contains the object before copying.",
@@ -45,7 +51,9 @@ from swh.objstorage.cli import objstorage_cli_group
     ),
 )
 @click.pass_context
-def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst, concurrency):
+def content_replay(
+    ctx, stop_after_objects, exclude_sha1_file, size_limit, check_dst, concurrency
+):
     """Fill a destination Object Storage using a journal stream.
 
     This is typically used for a mirror configuration, by reading a Journal
@@ -65,6 +73,9 @@ def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst, concur
     and it must be sorted.
     This file will not be fully loaded into memory at any given time,
     so it can be arbitrarily large.
+
+    ``--size-limit`` exclude file content which size is (strictly) above
+    the given size limit. If 0, then there is no size limit.
 
     ``--check-dst`` sets whether the replayer should check in the destination
     ObjStorage before copying an object. You can turn that off if you know
@@ -111,29 +122,23 @@ def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst, concur
           db: 1
 
     """
-    import functools
     import mmap
 
     from swh.journal.client import get_journal_client
     from swh.model.model import SHA1_SIZE
-    from swh.objstorage.factory import get_objstorage
-    from swh.objstorage.replayer.replay import (
-        is_hash_in_bytearray,
-        process_replay_objects_content,
-    )
+    from swh.objstorage.replayer.replay import ContentReplayer, is_hash_in_bytearray
 
     conf = ctx.obj["config"]
-    try:
-        objstorage_src = get_objstorage(**conf.pop("objstorage"))
-    except KeyError:
-        ctx.fail("You must have a source objstorage configured in " "your config file.")
-    try:
-        objstorage_dst = get_objstorage(**conf.pop("objstorage_dst"))
-    except KeyError:
+    if "objstorage" not in conf:
+        ctx.fail("You must have a source objstorage configured in your config file.")
+    if "objstorage_dst" not in conf:
         ctx.fail(
-            "You must have a destination objstorage configured " "in your config file."
+            "You must have a destination objstorage configured in your config file."
         )
+    objstorage_src_cfg = conf.pop("objstorage")
+    objstorage_dst_cfg = conf.pop("objstorage_dst")
 
+    exclude_fns = []
     if exclude_sha1_file:
         map_ = mmap.mmap(exclude_sha1_file.fileno(), 0, prot=mmap.PROT_READ)
         if map_.size() % SHA1_SIZE != 0:
@@ -141,10 +146,32 @@ def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst, concur
                 "--exclude-sha1 must link to a file whose size is an "
                 "exact multiple of %d bytes." % SHA1_SIZE
             )
+        if hasattr(map_, "madvise"):
+            # Python >= 3.8
+            # Tells the kernel not to perform lookahead reads, which we are unlikely
+            # to benefit from.
+            map_.madvise(mmap.MADV_RANDOM)
         nb_excluded_hashes = int(map_.size() / SHA1_SIZE)
 
-        def exclude_fn(obj):
+        def exclude_by_hash(obj):
             return is_hash_in_bytearray(obj["sha1"], map_, nb_excluded_hashes)
+
+        exclude_fns.append(exclude_by_hash)
+
+    if size_limit:
+
+        def exclude_by_size(obj):
+            return obj["length"] > size_limit
+
+        exclude_fns.append(exclude_by_size)
+
+    if exclude_fns:
+
+        def exclude_fn(obj):
+            for fn in exclude_fns:
+                if fn(obj):
+                    return True
+            return False
 
     else:
         exclude_fn = None
@@ -163,20 +190,17 @@ def content_replay(ctx, stop_after_objects, exclude_sha1_file, check_dst, concur
         stop_after_objects=stop_after_objects,
         object_types=("content",),
     )
-    worker_fn = functools.partial(
-        process_replay_objects_content,
-        src=objstorage_src,
-        dst=objstorage_dst,
-        exclude_fn=exclude_fn,
-        check_dst=check_dst,
-        concurrency=concurrency,
-    )
-
-    if notify:
-        notify("READY=1")
-
     try:
-        client.process(worker_fn)
+        with ContentReplayer(
+            src=objstorage_src_cfg,
+            dst=objstorage_dst_cfg,
+            exclude_fn=exclude_fn,
+            check_dst=check_dst,
+            concurrency=concurrency,
+        ) as replayer:
+            if notify:
+                notify("READY=1")
+            client.process(replayer.replay)
     except KeyboardInterrupt:
         ctx.exit(0)
     else:

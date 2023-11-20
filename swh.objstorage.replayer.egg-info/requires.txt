@@ -1,4 +1,6 @@
+humanize
 redis
+tenacity
 swh.core[http]>=0.3
 swh.objstorage>=0.2.2
 swh.journal>=0.4.2
@@ -6,5 +8,6 @@ swh.journal>=0.4.2
 [testing]
 pytest
 pytest-redis
+swh.core[testing]
 types-pyyaml
 types-redis

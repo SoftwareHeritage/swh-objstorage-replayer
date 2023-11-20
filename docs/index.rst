@@ -1,7 +1,7 @@
 .. _swh-objstorage-replayer:
 
-Software Heritage - Object storage replayer
-===========================================
+.. include:: README.rst
+
 
 This Python module provides a command line tool to replicate content objects from a
 source Object storage to a destination one by listening the ``content`` topic of a
@@ -94,4 +94,12 @@ Reference Documentation
    :maxdepth: 2
 
    cli
-   /apidoc/swh.objstorage.replayer
+
+.. only:: standalone_package_doc
+
+   Indices and tables
+   ------------------
+
+   * :ref:`genindex`
+   * :ref:`modindex`
+   * :ref:`search`

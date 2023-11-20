@@ -1,9 +1,8 @@
-# Copyright (C) 2021 The Software Heritage developers
+# Copyright (C) 2021-2023 The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
 
-import functools
 import re
 
 import pytest
@@ -11,9 +10,11 @@ import pytest
 from swh.journal.client import JournalClient
 from swh.journal.writer import get_journal_writer
 from swh.model.model import Content
-from swh.objstorage.factory import get_objstorage
 from swh.objstorage.replayer import replay
-from swh.objstorage.replayer.replay import process_replay_objects_content
+from swh.objstorage.replayer.replay import ContentReplayer
+from swh.objstorage.replayer.tests.test_cli import (
+    _patch_objstorages as patch_objstorages,
+)
 
 
 @pytest.fixture
@@ -22,9 +23,12 @@ def statsd(monkeypatch, statsd):
     yield statsd
 
 
-def test_replay_statsd(kafka_server, kafka_prefix, kafka_consumer_group, statsd):
-    objstorage1 = get_objstorage(cls="memory")
-    objstorage2 = get_objstorage(cls="memory")
+@patch_objstorages(["src", "dst"])
+def test_replay_statsd(
+    objstorages, kafka_server, kafka_prefix, kafka_consumer_group, statsd
+):
+    src = objstorages["src"]
+    dst = objstorages["dst"]
 
     writer = get_journal_writer(
         cls="kafka",
@@ -49,7 +53,7 @@ def test_replay_statsd(kafka_server, kafka_prefix, kafka_consumer_group, statsd)
     ]
 
     for content in contents:
-        objstorage1.add(content.data, obj_id=content.sha1)
+        src.add(content.data, obj_id=content.sha1)
         writer.write_addition("content", content)
     excluded = [c.sha1 for c in contents[2:4]]
 
@@ -57,23 +61,21 @@ def test_replay_statsd(kafka_server, kafka_prefix, kafka_consumer_group, statsd)
         return cnt_d["sha1"] in excluded
 
     for content in contents[4:6]:
-        objstorage2.add(content.data, obj_id=content.sha1)
+        dst.add(content.data, obj_id=content.sha1)
 
-    replayer = JournalClient(
+    client = JournalClient(
         brokers=kafka_server,
         group_id=kafka_consumer_group,
         prefix=kafka_prefix,
         stop_on_eof=True,
-        # stop_after_objects=len(objects),
     )
 
-    worker_fn = functools.partial(
-        process_replay_objects_content,
-        src=objstorage1,
-        dst=objstorage2,
+    with ContentReplayer(
+        src={"cls": "mocked", "name": "src"},
+        dst={"cls": "mocked", "name": "dst"},
         exclude_fn=exclude_fn,
-    )
-    replayer.process(worker_fn)
+    ) as replayer:
+        client.process(replayer.replay)
 
     # We cannot expect any order from replayed objects, so statsd reports won't
     # be sorted according to contents, so we just count the expected occurrence
