@@ -183,7 +183,7 @@ def test_replay_content_structured_log(
 
     caplog.set_level(logging.DEBUG, "swh.objstorage.replayer.replay")
 
-    expected_obj_ids = set(hash_to_hex(sha1) for sha1 in contents)
+    expected_obj_ids = {hash_to_hex(sha1) for sha1 in contents}
 
     result = invoke(
         "replay",

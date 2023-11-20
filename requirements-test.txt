@@ -1,4 +1,5 @@
 pytest
 pytest-redis
+swh.core[testing]
 types-pyyaml
 types-redis
