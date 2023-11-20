@@ -8,5 +8,6 @@ swh.journal>=0.4.2
 [testing]
 pytest
 pytest-redis
+swh.core[testing]
 types-pyyaml
 types-redis

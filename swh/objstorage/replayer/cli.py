@@ -146,6 +146,11 @@ def content_replay(
                 "--exclude-sha1 must link to a file whose size is an "
                 "exact multiple of %d bytes." % SHA1_SIZE
             )
+        if hasattr(map_, "madvise"):
+            # Python >= 3.8
+            # Tells the kernel not to perform lookahead reads, which we are unlikely
+            # to benefit from.
+            map_.madvise(mmap.MADV_RANDOM)
         nb_excluded_hashes = int(map_.size() / SHA1_SIZE)
 
         def exclude_by_hash(obj):
