@@ -1,12 +1,12 @@
 Metadata-Version: 2.1
 Name: swh.objstorage.replayer
-Version: 1.4.2
+Version: 1.5.0
 Summary: Software Heritage content replayer
-Home-page: https://gitlab.softwareheritage.org/swh/devel/swh-objstorage-replayer
-Author: Software Heritage developers
-Author-email: swh-devel@inria.fr
-Project-URL: Bug Reports, https://gitlab.softwareheritage.org/swh/devel/swh-objstorage-replayer/-/issue
+Author-email: Software Heritage developers <swh-devel@inria.fr>
+Project-URL: Homepage, https://gitlab.softwareheritage.org/swh/devel/swh-objstorage-replayer
+Project-URL: Bug Reports, https://gitlab.softwareheritage.org/swh/devel/swh-objstorage-replayer/-/issues
 Project-URL: Funding, https://www.softwareheritage.org/donate
+Project-URL: Documentation, https://docs.softwareheritage.org/devel/swh-objstorage-replayer/
 Project-URL: Source, https://gitlab.softwareheritage.org/swh/devel/swh-objstorage-replayer.git
 Classifier: Programming Language :: Python :: 3
 Classifier: Intended Audience :: Developers

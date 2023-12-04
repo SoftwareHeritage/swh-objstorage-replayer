@@ -1,0 +1,11 @@
+# Changes here will be overwritten by Copier
+_commit: v0.1.6
+_src_path: https://gitlab.softwareheritage.org/swh/devel/swh-py-template.git
+description: Software Heritage content replayer
+distribution_name: swh-objstorage-replayer
+have_cli: true
+have_workers: false
+package_root: swh/objstorage/replayer
+project_name: swh.objstorage.replayer
+python_minimal_version: '3.7'
+readme_format: rst
