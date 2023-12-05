@@ -354,7 +354,7 @@ class ContentReplayer:
         )
         t0 = time()
         nobjs = 0
-        for (object_type, objects) in all_objects.items():
+        for object_type, objects in all_objects.items():
             if object_type != "content":
                 logger.warning(
                     "Received a series of %s, this should not happen", object_type

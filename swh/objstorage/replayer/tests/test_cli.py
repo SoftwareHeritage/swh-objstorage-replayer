@@ -162,7 +162,7 @@ def test_replay_content(
     assert result.exit_code == 0, result.output
     assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
 
-    for (sha1, content) in contents.items():
+    for sha1, content in contents.items():
         assert sha1 in objstorages["dst"], sha1
         assert objstorages["dst"].get(sha1) == content
 
@@ -264,7 +264,7 @@ def test_replay_content_static_group_id(
     assert consumer_settings["session.timeout.ms"] == 60 * 10 * 1000
     assert consumer_settings["max.poll.interval.ms"] == 90 * 10 * 1000
 
-    for (sha1, content) in contents.items():
+    for sha1, content in contents.items():
         assert sha1 in objstorages["dst"], sha1
         assert objstorages["dst"].get(sha1) == content
 
@@ -308,7 +308,7 @@ def test_replay_content_exclude_by_hash(
     assert result.exit_code == 0, result.output
     assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
 
-    for (sha1, content) in contents.items():
+    for sha1, content in contents.items():
         if sha1 in excluded_contents:
             assert sha1 not in objstorages["dst"], sha1
         else:
@@ -350,7 +350,7 @@ def test_replay_content_exclude_by_size(
     assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
     assert [c for c in contents.values() if len(c) > 5]
     assert [c for c in contents.values() if len(c) <= 5]
-    for (sha1, content) in contents.items():
+    for sha1, content in contents.items():
         if len(content) > 5:
             assert sha1 not in objstorages["dst"], sha1
         else:
@@ -398,7 +398,7 @@ def test_replay_content_exclude_by_both(
     assert result.exit_code == 0, result.output
     assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
 
-    for (sha1, content) in contents.items():
+    for sha1, content in contents.items():
         if len(content) > 5:
             assert sha1 not in objstorages["dst"], sha1
         elif sha1 in excluded_contents:
@@ -490,7 +490,7 @@ def test_replay_content_check_dst(
         stats["copied"] == expected_copied and stats["in_dst"] == expected_in_dst
     ), "Unexpected amount of objects copied, see the captured log for details"
 
-    for (sha1, content) in contents.items():
+    for sha1, content in contents.items():
         assert sha1 in objstorages["dst"], sha1
         assert objstorages["dst"].get(sha1) == content
 
@@ -599,7 +599,7 @@ def test_replay_content_check_dst_retry(
     assert not redisdb.keys()
 
     # in the end, the replay process should be OK
-    for (sha1, content) in contents.items():
+    for sha1, content in contents.items():
         assert sha1 in objstorages["dst"], sha1
         assert objstorages["dst"].get(sha1) == content
 
@@ -723,7 +723,7 @@ def test_replay_content_failed_copy_retry(
 
     # check valid object are in the dst objstorage, but
     # failed objects are not.
-    for (sha1, content) in contents.items():
+    for sha1, content in contents.items():
         if hash_to_hex(sha1) in definitely_failed:
             assert sha1 not in objstorages["dst"]
             continue
@@ -793,7 +793,7 @@ def test_replay_content_objnotfound(
         not_in_src == contents_deleted
     ), "Mismatch between deleted contents and not_in_src logs"
 
-    for (sha1, content) in contents.items():
+    for sha1, content in contents.items():
         if sha1 not in objstorages["src"]:
             continue
         assert sha1 in objstorages["dst"], sha1
