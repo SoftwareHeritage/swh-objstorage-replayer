@@ -7,7 +7,7 @@ import re
 
 import pytest
 
-from swh.journal.client import JournalClient
+from swh.journal.client import EofBehavior, JournalClient
 from swh.journal.writer import get_journal_writer
 from swh.model.model import Content
 from swh.objstorage.replayer import replay
@@ -53,7 +53,7 @@ def test_replay_statsd(
     ]
 
     for content in contents:
-        src.add(content.data, obj_id=content.sha1)
+        src.add(content.data, obj_id=content.hashes())
         writer.write_addition("content", content)
     excluded = [c.sha1 for c in contents[2:4]]
 
@@ -61,13 +61,13 @@ def test_replay_statsd(
         return cnt_d["sha1"] in excluded
 
     for content in contents[4:6]:
-        dst.add(content.data, obj_id=content.sha1)
+        dst.add(content.data, obj_id=content.hashes())
 
     client = JournalClient(
         brokers=kafka_server,
         group_id=kafka_consumer_group,
         prefix=kafka_prefix,
-        stop_on_eof=True,
+        on_eof=EofBehavior.STOP,
     )
 
     with ContentReplayer(

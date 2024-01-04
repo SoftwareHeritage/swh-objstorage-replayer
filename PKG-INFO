@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: swh.objstorage.replayer
-Version: 1.5.0
+Version: 2.0.0
 Summary: Software Heritage content replayer
 Author-email: Software Heritage developers <swh-devel@inria.fr>
 Project-URL: Homepage, https://gitlab.softwareheritage.org/swh/devel/swh-objstorage-replayer
@@ -21,7 +21,7 @@ Requires-Dist: humanize
 Requires-Dist: redis
 Requires-Dist: tenacity
 Requires-Dist: swh.core[http]>=0.3
-Requires-Dist: swh.objstorage>=0.2.2
+Requires-Dist: swh.objstorage>=2.3.1
 Requires-Dist: swh.journal>=0.4.2
 Provides-Extra: testing
 Requires-Dist: pytest; extra == "testing"
