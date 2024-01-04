@@ -5,6 +5,7 @@
 
 import logging
 from queue import Empty, Queue
+import sys
 from threading import Event, Thread
 from time import time
 from traceback import format_tb
@@ -14,12 +15,19 @@ from humanize import naturaldelta, naturalsize
 import msgpack
 from sentry_sdk import capture_exception, push_scope
 
+from swh.objstorage.interface import (
+    CompositeObjId,
+    ObjStorageInterface,
+    objid_from_dict,
+)
+
 try:
     from systemd.daemon import notify
 except ImportError:
     notify = None
 
 from tenacity import (
+    RetryCallState,
     retry,
     retry_if_exception_type,
     stop_after_attempt,
@@ -30,19 +38,36 @@ from tenacity.retry import retry_base
 from swh.core.statsd import statsd
 from swh.model.hashutil import hash_to_hex
 from swh.model.model import SHA1_SIZE
-from swh.objstorage.constants import ID_HASH_ALGO
 from swh.objstorage.exc import Error, ObjNotFoundError
 
 # import the factory module is needed to make tests work (get_objstorage is patched)
 import swh.objstorage.factory as factory
 
 logger = logging.getLogger(__name__)
-REPORTER = None
+REPORTER: Optional[Callable[[str, bytes], Any]] = None
 
 CONTENT_OPERATIONS_METRIC = "swh_content_replayer_operations_total"
 CONTENT_RETRY_METRIC = "swh_content_replayer_retries_total"
 CONTENT_BYTES_METRIC = "swh_content_replayer_bytes"
 CONTENT_DURATION_METRIC = "swh_content_replayer_duration_seconds"
+
+
+def format_obj_id(obj_id: CompositeObjId) -> str:
+    return ";".join(
+        (
+            "%s:%s" % (algo, hash_to_hex(hash))
+            for algo, hash in sorted(obj_id.items())
+            if hash
+        )
+    )
+
+
+def logger_debug_obj_id(msg, args, **kwargs):
+    if logger.isEnabledFor(logging.DEBUG):
+        if sys.version_info >= (3, 8):
+            # Ignore this helper in line/function calculation
+            kwargs = {**kwargs, "stacklevel": kwargs.get("stacklevel", 1) + 1}
+        logger.debug(msg, {**args, "obj_id": format_obj_id(args["obj_id"])}, **kwargs)
 
 
 def is_hash_in_bytearray(hash_, array, nb_hashes, hash_size=SHA1_SIZE):
@@ -96,31 +121,44 @@ def is_hash_in_bytearray(hash_, array, nb_hashes, hash_size=SHA1_SIZE):
 class ReplayError(Exception):
     """An error occurred during the replay of an object"""
 
-    def __init__(self, *, obj_id, exc):
-        self.obj_id = hash_to_hex(obj_id)
+    def __init__(self, *, obj_id: CompositeObjId, exc) -> None:
+        self.obj_id = obj_id
         self.exc = exc
 
-    def __str__(self):
+    def __str__(self) -> str:
         return "ReplayError(%s, %r, %s)" % (
-            self.obj_id,
+            format_obj_id(self.obj_id),
             self.exc,
             format_tb(self.exc.__traceback__),
         )
 
 
-def log_replay_retry(retry_state, sleep=None, last_result=None):
+def log_replay_retry(
+    retry_state: RetryCallState, sleep: Optional[float] = None, last_result: Any = None
+) -> None:
     """Log a retry of the content replayer"""
+    assert retry_state.outcome is not None
     exc = retry_state.outcome.exception()
+    assert isinstance(exc, ReplayError)
+    assert retry_state.fn is not None
     operation = retry_state.fn.__name__
-    logger.debug(
+    logger_debug_obj_id(
         "Retry operation %(operation)s on %(obj_id)s: %(exc)s",
-        {"operation": operation, "obj_id": exc.obj_id, "exc": str(exc.exc)},
+        {
+            "operation": operation,
+            "obj_id": exc.obj_id,
+            "exc": str(exc.exc),
+        },
     )
 
 
-def log_replay_error(retry_state):
+def log_replay_error(retry_state: RetryCallState) -> None:
     """Log a replay error to sentry"""
+    assert retry_state.outcome
     exc = retry_state.outcome.exception()
+
+    assert isinstance(exc, ReplayError)
+    assert retry_state.fn
 
     with push_scope() as scope:
         scope.set_tag("operation", retry_state.fn.__name__)
@@ -128,7 +166,7 @@ def log_replay_error(retry_state):
         capture_exception(exc.exc)
 
     error_context = {
-        "obj_id": exc.obj_id,
+        "obj_id": format_obj_id(exc.obj_id),
         "operation": retry_state.fn.__name__,
         "exc": str(exc),
         "retries": retry_state.attempt_number,
@@ -142,7 +180,7 @@ def log_replay_error(retry_state):
 
     # if we have a global error (redis) reporter
     if REPORTER is not None:
-        oid = f"blob:{exc.obj_id}"
+        oid = f"blob:{format_obj_id(exc.obj_id)}"
         msg = msgpack.dumps(error_context)
         REPORTER(oid, msg)
 
@@ -155,8 +193,10 @@ CONTENT_REPLAY_RETRIES = 3
 class retry_log_if_success(retry_base):
     """Log in statsd the number of attempts required to succeed"""
 
-    def __call__(self, retry_state):
+    def __call__(self, retry_state: RetryCallState):
+        assert retry_state.outcome
         if not retry_state.outcome.failed:
+            assert retry_state.fn
             statsd.increment(
                 CONTENT_RETRY_METRIC,
                 tags={
@@ -177,16 +217,16 @@ content_replay_retry = retry(
 
 
 @content_replay_retry
-def get_object(objstorage, obj_id):
+def get_object(objstorage: ObjStorageInterface, obj_id: CompositeObjId) -> bytes:
     try:
         with statsd.timed(CONTENT_DURATION_METRIC, tags={"request": "get"}):
             obj = objstorage.get(obj_id)
-            logger.debug("retrieved %(obj_id)s", {"obj_id": hash_to_hex(obj_id)})
+            logger_debug_obj_id("retrieved %(obj_id)s", {"obj_id": obj_id})
         return obj
     except ObjNotFoundError:
         logger.error(
             "Failed to retrieve %(obj_id)s: object not found",
-            {"obj_id": hash_to_hex(obj_id)},
+            {"obj_id": format_obj_id(obj_id)},
         )
         raise
     except Exception as exc:
@@ -194,22 +234,24 @@ def get_object(objstorage, obj_id):
 
 
 @content_replay_retry
-def put_object(objstorage, obj_id, obj):
+def put_object(objstorage: ObjStorageInterface, obj_id: CompositeObjId, obj: bytes):
     try:
-        logger.debug("putting %(obj_id)s", {"obj_id": hash_to_hex(obj_id)})
+        logger_debug_obj_id("putting %(obj_id)s", {"obj_id": obj_id})
         with statsd.timed(CONTENT_DURATION_METRIC, tags={"request": "put"}):
-            logger.debug("storing %(obj_id)s", {"obj_id": hash_to_hex(obj_id)})
+            logger_debug_obj_id("storing %(obj_id)s", {"obj_id": obj_id})
             objstorage.add(obj, obj_id, check_presence=False)
-            logger.debug("stored %(obj_id)s", {"obj_id": hash_to_hex(obj_id)})
+            logger_debug_obj_id("stored %(obj_id)s", {"obj_id": obj_id})
     except Exception as exc:
         logger.error(
             "putting %(obj_id)s failed: %(exc)r",
-            {"obj_id": hash_to_hex(obj_id), "exc": exc},
+            {"obj_id": format_obj_id(obj_id), "exc": exc},
         )
         raise ReplayError(obj_id=obj_id, exc=exc) from None
 
 
-def copy_object(obj_id, src, dst):
+def copy_object(
+    obj_id: CompositeObjId, src: ObjStorageInterface, dst: ObjStorageInterface
+) -> int:
     obj = get_object(src, obj_id)
     if obj is not None:
         put_object(dst, obj_id, obj)
@@ -219,7 +261,7 @@ def copy_object(obj_id, src, dst):
 
 
 @content_replay_retry
-def obj_in_objstorage(obj_id, dst):
+def obj_in_objstorage(obj_id: CompositeObjId, dst: ObjStorageInterface) -> bool:
     """Check if an object is already in an objstorage, tenaciously"""
     try:
         return obj_id in dst
@@ -232,7 +274,7 @@ class ContentReplayer:
         self,
         src: Dict[str, Any],
         dst: Dict[str, Any],
-        exclude_fn: Optional[Callable[[dict], bool]] = None,
+        exclude_fn: Optional[Callable[[Dict[str, Any]], bool]] = None,
         check_dst: bool = True,
         check_obj: bool = False,
         concurrency: int = 16,
@@ -243,7 +285,7 @@ class ContentReplayer:
 
         * `obj['status']` is `'visible'`
         * `exclude_fn(obj)` is `False` (if `exclude_fn` is provided)
-        * `obj['sha1'] not in dst` (if `check_dst` is True)
+        * `CompositeObjId(**obj) not in dst` (if `check_dst` is True)
 
         Args:
             src: An object storage configuration dict (see
@@ -286,19 +328,32 @@ class ContentReplayer:
         for worker in self.workers:
             worker.join()
 
-    def _copy_object(self, obj, src, dst):
-        obj_id = obj[ID_HASH_ALGO]
-        logger.debug("Starting copy object %s", hash_to_hex(obj_id))
+    def _copy_object(
+        self, obj: Dict[str, Any], src: ObjStorageInterface, dst: ObjStorageInterface
+    ):
+        obj_id = objid_from_dict(obj)
+
+        if not obj_id:
+            raise ValueError(
+                "Object is missing the keys expected in CompositeObjId", obj
+            )
+
+        logger_debug_obj_id("Starting copy object %(obj_id)s", {"obj_id": obj_id})
         decision = None
         copied_bytes = 0
         tags = {}
 
         if obj["status"] != "visible":
-            logger.debug("skipped %s (status=%s)", hash_to_hex(obj_id), obj["status"])
+            logger_debug_obj_id(
+                "skipped %(obj_id)s (status=%(status)s)",
+                {"obj_id": obj_id, "status": obj["status"]},
+            )
             decision = "skipped"
             tags["status"] = obj["status"]
         elif self.exclude_fn and self.exclude_fn(obj):
-            logger.debug("skipped %s (manually excluded)", hash_to_hex(obj_id))
+            logger_debug_obj_id(
+                "skipped %(obj_id)s (manually excluded)", {"obj_id": obj_id}
+            )
             decision = "excluded"
         elif self.check_dst and obj_in_objstorage(obj_id, dst):
             decision = "in_dst"
@@ -306,24 +361,29 @@ class ContentReplayer:
                 try:
                     dst.check(obj_id)
                 except Error:
-                    logger.info("invalid object found in dst %s", hash_to_hex(obj_id))
+                    logger.info("invalid object found in dst %s", format_obj_id(obj_id))
                     decision = None
                     tags["status"] = "invalid_in_dst"
         if decision is None:
             try:
                 copied_bytes = copy_object(obj_id, src, dst)
             except ObjNotFoundError:
-                logger.debug("not found %s", hash_to_hex(obj_id))
+                logger_debug_obj_id("not found %(obj_id)s", {"obj_id": obj_id})
                 decision = "not_found"
+                if not self.check_dst and obj_in_objstorage(obj_id, dst):
+                    tags["status"] = "found_in_dst"
             except Exception as exc:
-                logger.info("failed %s (%r)", hash_to_hex(obj_id), exc)
+                logger.info("failed %s", format_obj_id(obj_id), exc_info=exc)
                 decision = "failed"
             else:
                 if copied_bytes is None:
-                    logger.debug("failed %s (None)", hash_to_hex(obj_id))
+                    logger_debug_obj_id("failed %(obj_id)s (None)", {"obj_id": obj_id})
                     decision = "failed"
                 else:
-                    logger.debug("copied %s (%d)", hash_to_hex(obj_id), copied_bytes)
+                    logger_debug_obj_id(
+                        "copied %(obj_id)s (%(bytes)d)",
+                        {"obj_id": obj_id, "bytes": copied_bytes},
+                    )
                     decision = "copied"
         tags["decision"] = decision
         statsd.increment(CONTENT_OPERATIONS_METRIC, tags=tags)
@@ -354,7 +414,7 @@ class ContentReplayer:
         )
         t0 = time()
         nobjs = 0
-        for (object_type, objects) in all_objects.items():
+        for object_type, objects in all_objects.items():
             if object_type != "content":
                 logger.warning(
                     "Received a series of %s, this should not happen", object_type

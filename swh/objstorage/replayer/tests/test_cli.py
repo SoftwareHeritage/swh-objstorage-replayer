@@ -20,10 +20,10 @@ import pytest
 import yaml
 
 from swh.journal.serializers import key_to_kafka
-from swh.model.hashutil import MultiHash, hash_to_hex
+from swh.model.hashutil import MultiHash
 from swh.objstorage.backends.in_memory import InMemoryObjStorage
 from swh.objstorage.replayer.cli import objstorage_cli_group
-from swh.objstorage.replayer.replay import CONTENT_REPLAY_RETRIES
+from swh.objstorage.replayer.replay import CONTENT_REPLAY_RETRIES, format_obj_id
 
 logger = logging.getLogger(__name__)
 
@@ -110,18 +110,22 @@ def _fill_objstorage_and_kafka(kafka_server, kafka_prefix, objstorage):
         }
     )
 
-    contents = {}
+    contents = []
     for i in range(NUM_CONTENTS):
         content = b"\x00" * i + bytes([i])
-        sha1 = MultiHash(["sha1"]).from_data(content).digest()["sha1"]
-        objstorage.add(content=content, obj_id=sha1)
-        contents[sha1] = content
+        obj_id = (
+            MultiHash(["sha1", "sha1_git", "sha256", "blake2s256"], length=len(content))
+            .from_data(content)
+            .digest()
+        )
+        objstorage.add(content=content, obj_id=obj_id)
+        contents.append((obj_id, content))
         producer.produce(
             topic=kafka_prefix + ".content",
-            key=key_to_kafka(sha1),
+            key=key_to_kafka(obj_id),
             value=key_to_kafka(
                 {
-                    "sha1": sha1,
+                    **obj_id,
                     "length": len(content),
                     "status": "visible",
                 }
@@ -162,9 +166,9 @@ def test_replay_content(
     assert result.exit_code == 0, result.output
     assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
 
-    for (sha1, content) in contents.items():
-        assert sha1 in objstorages["dst"], sha1
-        assert objstorages["dst"].get(sha1) == content
+    for obj_id, content in contents:
+        assert obj_id in objstorages["dst"], obj_id
+        assert objstorages["dst"].get(obj_id) == content
 
 
 @_patch_objstorages(["src", "dst"])
@@ -183,7 +187,7 @@ def test_replay_content_structured_log(
 
     caplog.set_level(logging.DEBUG, "swh.objstorage.replayer.replay")
 
-    expected_obj_ids = {hash_to_hex(sha1) for sha1 in contents}
+    expected_obj_ids = {format_obj_id(obj_id) for (obj_id, _) in contents}
 
     result = invoke(
         "replay",
@@ -264,9 +268,9 @@ def test_replay_content_static_group_id(
     assert consumer_settings["session.timeout.ms"] == 60 * 10 * 1000
     assert consumer_settings["max.poll.interval.ms"] == 90 * 10 * 1000
 
-    for (sha1, content) in contents.items():
-        assert sha1 in objstorages["dst"], sha1
-        assert objstorages["dst"].get(sha1) == content
+    for obj_id, content in contents:
+        assert obj_id in objstorages["dst"], format_obj_id(obj_id)
+        assert objstorages["dst"].get(obj_id) == content
 
 
 @_patch_objstorages(["src", "dst"])
@@ -285,7 +289,8 @@ def test_replay_content_exclude_by_hash(
         kafka_server, kafka_prefix, objstorages["src"]
     )
 
-    excluded_contents = list(contents)[0::2]  # picking half of them
+    # picking half of the contents to exclude
+    excluded_contents = [oid["sha1"] for oid, _ in contents[::2]]
     with tempfile.NamedTemporaryFile(mode="w+b") as fd:
         fd.write(b"".join(sorted(excluded_contents)))
 
@@ -308,12 +313,12 @@ def test_replay_content_exclude_by_hash(
     assert result.exit_code == 0, result.output
     assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
 
-    for (sha1, content) in contents.items():
-        if sha1 in excluded_contents:
-            assert sha1 not in objstorages["dst"], sha1
+    for obj_id, content in contents:
+        if obj_id["sha1"] in excluded_contents:
+            assert obj_id not in objstorages["dst"], format_obj_id(obj_id)
         else:
-            assert sha1 in objstorages["dst"], sha1
-            assert objstorages["dst"].get(sha1) == content
+            assert obj_id in objstorages["dst"], obj_id
+            assert objstorages["dst"].get(obj_id) == content
 
 
 @_patch_objstorages(["src", "dst"])
@@ -348,14 +353,16 @@ def test_replay_content_exclude_by_size(
     expected = r"Done.\n"
     assert result.exit_code == 0, result.output
     assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
-    assert [c for c in contents.values() if len(c) > 5]
-    assert [c for c in contents.values() if len(c) <= 5]
-    for (sha1, content) in contents.items():
+
+    assert any(len(c) > 5 for _, c in contents)
+    assert any(len(c) <= 5 for _, c in contents)
+
+    for obj_id, content in contents:
         if len(content) > 5:
-            assert sha1 not in objstorages["dst"], sha1
+            assert obj_id not in objstorages["dst"], format_obj_id(obj_id)
         else:
-            assert sha1 in objstorages["dst"], sha1
-            assert objstorages["dst"].get(sha1) == content
+            assert obj_id in objstorages["dst"], format_obj_id(obj_id)
+            assert objstorages["dst"].get(obj_id) == content
 
 
 @_patch_objstorages(["src", "dst"])
@@ -373,7 +380,10 @@ def test_replay_content_exclude_by_both(
     contents = _fill_objstorage_and_kafka(
         kafka_server, kafka_prefix, objstorages["src"]
     )
-    excluded_contents = list(contents)[0::2]  # picking half of them
+
+    # Exclude half contents by sha1
+    excluded_contents = [oid["sha1"] for oid, _ in contents[::2]]
+
     with tempfile.NamedTemporaryFile(mode="w+b") as fd:
         fd.write(b"".join(sorted(excluded_contents)))
 
@@ -398,14 +408,14 @@ def test_replay_content_exclude_by_both(
     assert result.exit_code == 0, result.output
     assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
 
-    for (sha1, content) in contents.items():
+    for obj_id, content in contents:
         if len(content) > 5:
-            assert sha1 not in objstorages["dst"], sha1
-        elif sha1 in excluded_contents:
-            assert sha1 not in objstorages["dst"], sha1
+            assert obj_id not in objstorages["dst"], format_obj_id(obj_id)
+        elif obj_id["sha1"] in excluded_contents:
+            assert obj_id not in objstorages["dst"], format_obj_id(obj_id)
         else:
-            assert sha1 in objstorages["dst"], sha1
-            assert objstorages["dst"].get(sha1) == content
+            assert obj_id in objstorages["dst"], format_obj_id(obj_id)
+            assert objstorages["dst"].get(obj_id) == content
 
 
 NUM_CONTENTS_DST = 5
@@ -442,10 +452,8 @@ def test_replay_content_check_dst(
     )
 
     # add some objects in the dst objstorage
-    for i, (sha1, content) in enumerate(contents.items()):
-        if i >= NUM_CONTENTS_DST:
-            break
-        objstorages["dst"].add(content, obj_id=sha1)
+    for obj_id, content in contents[:NUM_CONTENTS_DST]:
+        objstorages["dst"].add(content, obj_id=obj_id)
 
     caplog.set_level(logging.DEBUG, "swh.objstorage.replayer.replay")
 
@@ -490,9 +498,9 @@ def test_replay_content_check_dst(
         stats["copied"] == expected_copied and stats["in_dst"] == expected_in_dst
     ), "Unexpected amount of objects copied, see the captured log for details"
 
-    for (sha1, content) in contents.items():
-        assert sha1 in objstorages["dst"], sha1
-        assert objstorages["dst"].get(sha1) == content
+    for obj_id, content in contents:
+        assert obj_id in objstorages["dst"], format_obj_id(obj_id)
+        assert objstorages["dst"].get(obj_id) == content
 
 
 class FlakyObjStorage(InMemoryObjStorage):
@@ -518,15 +526,16 @@ class FlakyObjStorage(InMemoryObjStorage):
             self.state = state
 
     def flaky_operation(self, op, obj_id):
-        if self.failures_left[op, obj_id] > 0:
-            self.failures_left[op, obj_id] -= 1
-            raise RuntimeError("Failed %s on %s" % (op, hash_to_hex(obj_id)))
+        h_obj_id = format_obj_id(obj_id)
+        if self.failures_left[op, h_obj_id] > 0:
+            self.failures_left[op, h_obj_id] -= 1
+            raise RuntimeError("Failed %s on %s" % (op, h_obj_id))
 
     def get(self, obj_id):
         self.flaky_operation("get", obj_id)
         return super().get(obj_id)
 
-    def add(self, data, obj_id=None, check_presence=True):
+    def add(self, data, obj_id, check_presence=True):
         self.flaky_operation("add", obj_id)
         return super().add(data, obj_id=obj_id, check_presence=check_presence)
 
@@ -557,11 +566,9 @@ def test_replay_content_check_dst_retry(
     # build a flaky dst objstorage in which the 'in' operation for the first
     # NUM_CONTENT_DST objects will fail once
     failures = {}
-    for i, (sha1, content) in enumerate(contents.items()):
-        if i >= NUM_CONTENTS_DST:
-            break
-        objstorages["dst"].add(content, obj_id=sha1)
-        failures["in", sha1] = 1
+    for obj_id, content in contents[:NUM_CONTENTS_DST]:
+        objstorages["dst"].add(content, obj_id=obj_id)
+        failures["in", format_obj_id(obj_id)] = 1
     orig_dst = objstorages["dst"]
     objstorages["dst"] = FlakyObjStorage(state=orig_dst.state, failures=failures)
 
@@ -599,9 +606,9 @@ def test_replay_content_check_dst_retry(
     assert not redisdb.keys()
 
     # in the end, the replay process should be OK
-    for (sha1, content) in contents.items():
-        assert sha1 in objstorages["dst"], sha1
-        assert objstorages["dst"].get(sha1) == content
+    for obj_id, content in contents:
+        assert obj_id in objstorages["dst"], format_obj_id(obj_id)
+        assert objstorages["dst"].get(obj_id) == content
 
 
 @_patch_objstorages(["src", "dst"])
@@ -637,7 +644,7 @@ def test_replay_content_failed_copy_retry(
         num_retry_contents < NUM_CONTENTS
     ), "Need to generate more test contents to properly test retry behavior"
 
-    for i, sha1 in enumerate(contents):
+    for i, (obj_id, _) in enumerate(contents):
         if i >= num_retry_contents:
             break
 
@@ -647,14 +654,14 @@ def test_replay_content_failed_copy_retry(
         # This generates failures of add for the first CONTENT_REPLAY_RETRIES
         # objects, then failures of get.
         if i < CONTENT_REPLAY_RETRIES:
-            add_failures["add", sha1] = num_failures
+            add_failures["add", format_obj_id(obj_id)] = num_failures
         else:
-            get_failures["get", sha1] = num_failures
+            get_failures["get", format_obj_id(obj_id)] = num_failures
 
         # Only contents that have CONTENT_REPLAY_RETRIES or more are
         # definitely failing
         if num_failures >= CONTENT_REPLAY_RETRIES:
-            definitely_failed.add(hash_to_hex(sha1))
+            definitely_failed.add(format_obj_id(obj_id))
 
     assert add_failures
     assert get_failures
@@ -723,13 +730,13 @@ def test_replay_content_failed_copy_retry(
 
     # check valid object are in the dst objstorage, but
     # failed objects are not.
-    for (sha1, content) in contents.items():
-        if hash_to_hex(sha1) in definitely_failed:
-            assert sha1 not in objstorages["dst"]
+    for obj_id, content in contents:
+        if format_obj_id(obj_id) in definitely_failed:
+            assert obj_id not in objstorages["dst"]
             continue
 
-        assert sha1 in objstorages["dst"], sha1
-        assert objstorages["dst"].get(sha1) == content
+        assert obj_id in objstorages["dst"], format_obj_id(obj_id)
+        assert objstorages["dst"].get(obj_id) == content
 
 
 @_patch_objstorages(["src", "dst"])
@@ -749,11 +756,9 @@ def test_replay_content_objnotfound(
     # delete a few objects from the src objstorage
     num_contents_deleted = 5
     contents_deleted = set()
-    for i, sha1 in enumerate(contents):
-        if i >= num_contents_deleted:
-            break
-        del objstorages["src"].state[sha1]
-        contents_deleted.add(hash_to_hex(sha1))
+    for obj_id, content in contents[:num_contents_deleted]:
+        del objstorages["src"].state[objstorages["src"]._state_key(obj_id)]
+        contents_deleted.add(format_obj_id(obj_id))
 
     caplog.set_level(logging.DEBUG, "swh.objstorage.replayer.replay")
 
@@ -793,8 +798,8 @@ def test_replay_content_objnotfound(
         not_in_src == contents_deleted
     ), "Mismatch between deleted contents and not_in_src logs"
 
-    for (sha1, content) in contents.items():
-        if sha1 not in objstorages["src"]:
+    for obj_id, content in contents:
+        if obj_id not in objstorages["src"]:
             continue
-        assert sha1 in objstorages["dst"], sha1
-        assert objstorages["dst"].get(sha1) == content
+        assert obj_id in objstorages["dst"], format_obj_id(obj_id)
+        assert objstorages["dst"].get(obj_id) == content

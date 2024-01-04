@@ -3,12 +3,10 @@
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
 
-import hashlib
-
 from hypothesis import given, settings
 from hypothesis.strategies import sets
 
-from swh.journal.client import JournalClient
+from swh.journal.client import EofBehavior, JournalClient
 from swh.journal.writer import get_journal_writer
 from swh.model.hypothesis_strategies import sha1
 from swh.model.model import Content
@@ -50,15 +48,14 @@ def test_replay_content(objstorages, kafka_server, kafka_prefix, kafka_consumer_
     )
 
     for content in CONTENTS:
-        objstorage1.add(content.data, obj_id=content.sha1)
+        objstorage1.add(content.data, obj_id=content.hashes())
         writer.write_addition("content", content)
 
     client = JournalClient(
         brokers=kafka_server,
         group_id=kafka_consumer_group,
         prefix=kafka_prefix,
-        stop_on_eof=True,
-        # stop_after_objects=len(objects),
+        on_eof=EofBehavior.STOP,
     )
 
     with ContentReplayer(
@@ -68,7 +65,9 @@ def test_replay_content(objstorages, kafka_server, kafka_prefix, kafka_consumer_
         client.process(replayer.replay)
     # only content with status visible will be copied in storage2
     expected_objstorage_state = {
-        c.sha1: c.data for c in CONTENTS if c.status == "visible"
+        objstorage2._state_key(c.hashes()): c.data
+        for c in CONTENTS
+        if c.status == "visible"
     }
 
     assert expected_objstorage_state == objstorage2.state
@@ -80,18 +79,18 @@ def test_replay_exclude(objstorages):
     dst = objstorages["dst"]
     cnt1 = b"foo bar"
     cnt2 = b"baz qux"
-    id1 = hashlib.sha1(cnt1).digest()
-    id2 = hashlib.sha1(cnt2).digest()
+    id1 = Content.from_data(cnt1).hashes()
+    id2 = Content.from_data(cnt2).hashes()
     src.add(b"foo bar", obj_id=id1)
     src.add(b"baz qux", obj_id=id2)
     kafka_partitions = {
         "content": [
             {
-                "sha1": id1,
+                **id1,
                 "status": "visible",
             },
             {
-                "sha1": id2,
+                **id2,
                 "status": "visible",
             },
         ]
@@ -99,7 +98,7 @@ def test_replay_exclude(objstorages):
     with ContentReplayer(
         src={"cls": "mocked", "name": "src"},
         dst={"cls": "mocked", "name": "dst"},
-        exclude_fn=lambda obj: obj["sha1"] == id1,
+        exclude_fn=lambda obj: obj["sha1"] == id1["sha1"],
         concurrency=1,
     ) as replayer:
         replayer.replay(kafka_partitions)
