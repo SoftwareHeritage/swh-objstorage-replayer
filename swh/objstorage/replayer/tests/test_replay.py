@@ -10,10 +10,9 @@ from swh.journal.client import EofBehavior, JournalClient
 from swh.journal.writer import get_journal_writer
 from swh.model.hypothesis_strategies import sha1
 from swh.model.model import Content
-from swh.objstorage.replayer.replay import ContentReplayer, is_hash_in_bytearray
-from swh.objstorage.replayer.tests.test_cli import (
-    _patch_objstorages as patch_objstorages,
-)
+
+from ..replay import ContentReplayer, is_hash_in_bytearray
+from .test_cli import _patch_objstorages as patch_objstorages
 
 CONTENTS = [Content.from_data(f"foo{i}".encode()) for i in range(10)] + [
     Content.from_data(f"forbidden foo{i}".encode(), status="hidden") for i in range(10)

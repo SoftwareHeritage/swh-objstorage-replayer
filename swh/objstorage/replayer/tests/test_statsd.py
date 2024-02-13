@@ -10,11 +10,10 @@ import pytest
 from swh.journal.client import EofBehavior, JournalClient
 from swh.journal.writer import get_journal_writer
 from swh.model.model import Content
-from swh.objstorage.replayer import replay
-from swh.objstorage.replayer.replay import ContentReplayer
-from swh.objstorage.replayer.tests.test_cli import (
-    _patch_objstorages as patch_objstorages,
-)
+
+from .. import replay
+from ..replay import ContentReplayer
+from .test_cli import _patch_objstorages as patch_objstorages
 
 
 @pytest.fixture
