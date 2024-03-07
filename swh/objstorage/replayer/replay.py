@@ -156,24 +156,19 @@ def log_replay_retry(
     )
 
 
-def log_replay_error(retry_state: RetryCallState) -> None:
-    """Log a replay error to sentry"""
-    assert retry_state.outcome
-    exc = retry_state.outcome.exception()
-
-    assert isinstance(exc, ReplayError)
-    assert retry_state.fn
-
+def log_replay_error(
+    obj_id: CompositeObjId, exc: Exception, operation: str, retries: int
+) -> None:
     with sentry_sdk.push_scope() as scope:
-        scope.set_tag("operation", retry_state.fn.__name__)
-        scope.set_extra("obj_id", hex_obj_id(exc.obj_id))
-        sentry_sdk.capture_exception(exc.exc)
+        scope.set_tag("operation", operation)
+        scope.set_extra("obj_id", hex_obj_id(obj_id))
+        sentry_sdk.capture_exception(exc)
 
     error_context = {
-        "obj_id": format_obj_id(exc.obj_id),
-        "operation": retry_state.fn.__name__,
+        "obj_id": format_obj_id(obj_id),
+        "operation": operation,
         "exc": str(exc),
-        "retries": retry_state.attempt_number,
+        "retries": retries,
     }
 
     logger.error(
@@ -184,9 +179,27 @@ def log_replay_error(retry_state: RetryCallState) -> None:
 
     # if we have a global error (redis) reporter
     if REPORTER is not None:
-        oid = f"blob:{format_obj_id(exc.obj_id)}"
+        oid = f"blob:{format_obj_id(obj_id)}"
         msg = msgpack.dumps(error_context)
         REPORTER(oid, msg)
+
+
+def retry_error_callback(retry_state: RetryCallState) -> None:
+    """Log a replay error to sentry"""
+    assert retry_state.outcome
+    exc = retry_state.outcome.exception()
+
+    assert isinstance(exc, ReplayError)
+    assert retry_state.fn
+
+    operation = retry_state.fn.__name__
+
+    log_replay_error(
+        obj_id=exc.obj_id,
+        exc=exc.exc,
+        operation=operation,
+        retries=retry_state.attempt_number,
+    )
 
     raise exc
 
@@ -216,7 +229,7 @@ content_replay_retry = retry(
     stop=stop_after_attempt(CONTENT_REPLAY_RETRIES),
     wait=wait_random_exponential(multiplier=1, max=60),
     before_sleep=log_replay_retry,
-    retry_error_callback=log_replay_error,
+    retry_error_callback=retry_error_callback,
 )
 
 
