@@ -88,9 +88,9 @@ def copy_object_q(q):
     """Wrap the original copy_object function to capture (thread-local) tenacity
     stats and puch them in a queue suitable for checking in a test session"""
 
-    def wrap(obj_id, src, dst):
+    def wrap(obj_id, *args, **kwargs):
         try:
-            ret = copy_object(obj_id, src, dst)
+            ret = copy_object(obj_id, *args, **kwargs)
             return ret
         finally:
             q.put(("get", obj_id, replay.get_object.retry.statistics.copy()))

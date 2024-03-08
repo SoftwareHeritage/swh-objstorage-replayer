@@ -40,8 +40,15 @@ from swh.objstorage.cli import objstorage_cli_group
 )
 @click.option(
     "--check-dst/--no-check-dst",
+    is_flag=True,
     default=True,
     help="Check whether the destination contains the object before copying.",
+)
+@click.option(
+    "--check-src-hashes",
+    is_flag=True,
+    default=False,
+    help="Check objects in flight.",
 )
 @click.option(
     "--concurrency",
@@ -53,7 +60,13 @@ from swh.objstorage.cli import objstorage_cli_group
 )
 @click.pass_context
 def content_replay(
-    ctx, stop_after_objects, exclude_sha1_file, size_limit, check_dst, concurrency
+    ctx,
+    stop_after_objects,
+    exclude_sha1_file,
+    size_limit,
+    check_dst,
+    check_src_hashes,
+    concurrency,
 ) -> None:
     """Fill a destination Object Storage using a journal stream.
 
@@ -81,6 +94,9 @@ def content_replay(
     ``--check-dst`` sets whether the replayer should check in the destination
     ObjStorage before copying an object. You can turn that off if you know
     you're copying to an empty ObjStorage.
+
+    ``--check-src-hashes`` computes the hashes of the fetched object before
+    sending it to the destination.
 
     ``--concurrency N`` sets the number of threads in charge of copy blob objects
     from the source objstorage to the destination one. Using a large concurrency
@@ -195,6 +211,7 @@ def content_replay(
             dst=objstorage_dst_cfg,
             exclude_fn=exclude_fn,
             check_dst=check_dst,
+            check_src_hashes=check_src_hashes,
             concurrency=concurrency,
         ) as replayer:
             if notify:

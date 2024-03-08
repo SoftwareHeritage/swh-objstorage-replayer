@@ -36,7 +36,7 @@ from tenacity import (
 from tenacity.retry import retry_base
 
 from swh.core.statsd import statsd
-from swh.model.hashutil import hash_to_hex
+from swh.model.hashutil import MultiHash, hash_to_hex
 from swh.model.model import SHA1_SIZE
 from swh.objstorage.exc import Error, ObjNotFoundError
 
@@ -50,6 +50,33 @@ CONTENT_OPERATIONS_METRIC = "swh_content_replayer_operations_total"
 CONTENT_RETRY_METRIC = "swh_content_replayer_retries_total"
 CONTENT_BYTES_METRIC = "swh_content_replayer_bytes"
 CONTENT_DURATION_METRIC = "swh_content_replayer_duration_seconds"
+
+
+class HashMismatch(Exception):
+    def __init__(self, expected, received):
+        self.mismatched = {}
+        self.matched = {}
+        for algo, value in expected.items():
+            received_value = received.get(algo)
+            if received_value != value:
+                self.mismatched[algo] = (received_value, value)
+            else:
+                self.matched[algo] = value
+
+    def __str__(self):
+        return "\n".join(
+            ["Hash Mismatch:"]
+            + [
+                f"  {algo}: {v[0].hex()} != expected {v[1].hex()}"
+                for algo, v in self.mismatched.items()
+            ]
+            + (
+                ["Matched hashes:"]
+                + [f" {algo}: {v.hex()}" for algo, v in self.matched]
+            )
+            if self.matched
+            else []
+        )
 
 
 def format_obj_id(obj_id: CompositeObjId) -> str:
@@ -250,6 +277,16 @@ def get_object(objstorage: ObjStorageInterface, obj_id: CompositeObjId) -> bytes
         raise ReplayError(obj_id=obj_id, exc=exc) from None
 
 
+def check_hashes(obj: bytes, obj_id: CompositeObjId):
+    h = MultiHash.from_data(obj, hash_names=obj_id.keys())
+    computed = h.digest()
+
+    if computed != obj_id:
+        exc = HashMismatch(obj_id, computed)
+        log_replay_error(obj_id=obj_id, exc=exc, operation="check_hashes", retries=1)
+        raise exc
+
+
 @content_replay_retry
 def put_object(objstorage: ObjStorageInterface, obj_id: CompositeObjId, obj: bytes):
     try:
@@ -267,10 +304,15 @@ def put_object(objstorage: ObjStorageInterface, obj_id: CompositeObjId, obj: byt
 
 
 def copy_object(
-    obj_id: CompositeObjId, src: ObjStorageInterface, dst: ObjStorageInterface
+    obj_id: CompositeObjId,
+    src: ObjStorageInterface,
+    dst: ObjStorageInterface,
+    check_src_hashes: bool = False,
 ) -> int:
     obj = get_object(src, obj_id)
     if obj is not None:
+        if check_src_hashes:
+            check_hashes(obj, obj_id)
         put_object(dst, obj_id, obj)
         statsd.increment(CONTENT_BYTES_METRIC, len(obj))
         return len(obj)
@@ -294,6 +336,7 @@ class ContentReplayer:
         exclude_fn: Optional[Callable[[Dict[str, Any]], bool]] = None,
         check_dst: bool = True,
         check_obj: bool = False,
+        check_src_hashes: bool = False,
         concurrency: int = 16,
     ):
         """Helper class that takes a list of records from Kafka (see
@@ -315,6 +358,7 @@ class ContentReplayer:
             check_obj: If check_dst is true, determines whether we should check
                 the existing object in the destination objstorage is valid; if not,
                 put the replayed object.
+            check_src_hashes: Checks the object before sending it to the dst objstorage.
             concurrency: Number of worker threads doing the replication process
                 (retrieve, check, store).
 
@@ -325,6 +369,7 @@ class ContentReplayer:
         self.exclude_fn = exclude_fn
         self.check_dst = check_dst
         self.check_obj = check_obj
+        self.check_src_hashes = check_src_hashes
         self.concurrency = concurrency
         self.obj_queue: Queue = Queue()
         self.return_queue: Queue = Queue()
@@ -383,12 +428,17 @@ class ContentReplayer:
                     tags["status"] = "invalid_in_dst"
         if decision is None:
             try:
-                copied_bytes = copy_object(obj_id, src, dst)
+                copied_bytes = copy_object(
+                    obj_id, src=src, dst=dst, check_src_hashes=self.check_src_hashes
+                )
             except ObjNotFoundError:
                 logger_debug_obj_id("not found %(obj_id)s", {"obj_id": obj_id})
                 decision = "not_found"
                 if not self.check_dst and obj_in_objstorage(obj_id, dst):
                     tags["status"] = "found_in_dst"
+            except HashMismatch as exc:
+                logger.info("hash mismatch %s", format_obj_id(obj_id), exc_info=exc)
+                decision = "hash_mismatch"
             except Exception as exc:
                 logger.info("failed %s", format_obj_id(obj_id), exc_info=exc)
                 decision = "failed"
@@ -415,7 +465,7 @@ class ContentReplayer:
             except Empty:
                 continue
             try:
-                decision, nbytes = self._copy_object(obj, src, dst)
+                decision, nbytes = self._copy_object(obj, src=src, dst=dst)
             except Exception as exc:
                 self.return_queue.put(("error", 0, exc))
             else:
@@ -427,7 +477,16 @@ class ContentReplayer:
     ):
         vol = 0
         stats = dict.fromkeys(
-            ["skipped", "excluded", "not_found", "failed", "copied", "in_dst"], 0
+            [
+                "skipped",
+                "excluded",
+                "not_found",
+                "failed",
+                "copied",
+                "in_dst",
+                "hash_mismatch",
+            ],
+            0,
         )
         t0 = time()
         nobjs = 0
