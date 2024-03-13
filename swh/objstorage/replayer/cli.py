@@ -127,8 +127,7 @@ def content_replay(
 
     from swh.journal.client import get_journal_client
     from swh.model.model import SHA1_SIZE
-
-    from .replay import ContentReplayer, is_hash_in_bytearray
+    from swh.objstorage.replayer.replay import ContentReplayer, is_hash_in_bytearray
 
     conf = ctx.obj["config"]
     if "objstorage" not in conf:
@@ -181,7 +180,7 @@ def content_replay(
     if "error_reporter" in replayer_cfg:
         from redis import Redis
 
-        from . import replay
+        from swh.objstorage.replayer import replay
 
         replay.REPORTER = Redis(**replayer_cfg.get("error_reporter")).set
 

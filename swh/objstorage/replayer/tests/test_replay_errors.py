@@ -14,11 +14,12 @@ from swh.objstorage import factory
 from swh.objstorage.exc import ObjNotFoundError
 from swh.objstorage.interface import CompositeObjId, ObjStorageInterface
 from swh.objstorage.multiplexer.filter.filter import ObjStorageFilter
-
-from .. import replay
-from ..replay import copy_object  # needed for MonkeyPatch
-from ..replay import format_obj_id
-from .test_cli import _patch_objstorages as patch_objstorages
+from swh.objstorage.replayer import replay
+from swh.objstorage.replayer.replay import copy_object  # needed for MonkeyPatch
+from swh.objstorage.replayer.replay import format_obj_id
+from swh.objstorage.replayer.tests.test_cli import (
+    _patch_objstorages as patch_objstorages,
+)
 
 CONTENTS = [Content.from_data(f"foo{i}".encode()) for i in range(10)] + [
     Content.from_data(f"forbidden foo{i}".encode(), status="hidden") for i in range(10)

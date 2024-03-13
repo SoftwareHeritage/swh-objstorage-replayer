@@ -22,11 +22,8 @@ import yaml
 from swh.journal.serializers import key_to_kafka
 from swh.model.hashutil import MultiHash
 from swh.objstorage.backends.in_memory import InMemoryObjStorage
-
-from ..cli import objstorage_cli_group
-from ..replay import CONTENT_REPLAY_RETRIES
-from ..replay import __name__ as replay_module_name
-from ..replay import format_obj_id, get_object, obj_in_objstorage, put_object
+from swh.objstorage.replayer.cli import objstorage_cli_group
+from swh.objstorage.replayer.replay import CONTENT_REPLAY_RETRIES, format_obj_id
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +42,8 @@ CLI_CONFIG = {
 
 @pytest.fixture
 def monkeypatch_retry_sleep(monkeypatch):
+    from swh.objstorage.replayer.replay import get_object, obj_in_objstorage, put_object
+
     monkeypatch.setattr(get_object.retry, "sleep", lambda x: None)
     monkeypatch.setattr(put_object.retry, "sleep", lambda x: None)
     monkeypatch.setattr(obj_in_objstorage.retry, "sleep", lambda x: None)
@@ -186,7 +185,7 @@ def test_replay_content_structured_log(
         kafka_server, kafka_prefix, objstorages["src"]
     )
 
-    caplog.set_level(logging.DEBUG, replay_module_name)
+    caplog.set_level(logging.DEBUG, "swh.objstorage.replayer.replay")
 
     expected_obj_ids = {format_obj_id(obj_id) for (obj_id, _) in contents}
 
@@ -456,7 +455,7 @@ def test_replay_content_check_dst(
     for obj_id, content in contents[:NUM_CONTENTS_DST]:
         objstorages["dst"].add(content, obj_id=obj_id)
 
-    caplog.set_level(logging.DEBUG, replay_module_name)
+    caplog.set_level(logging.DEBUG, "swh.objstorage.replayer.replay")
 
     result = invoke(
         "replay",
@@ -573,7 +572,7 @@ def test_replay_content_check_dst_retry(
     orig_dst = objstorages["dst"]
     objstorages["dst"] = FlakyObjStorage(state=orig_dst.state, failures=failures)
 
-    caplog.set_level(logging.DEBUG, replay_module_name)
+    caplog.set_level(logging.DEBUG, "swh.objstorage.replayer.replay")
     result = invoke(
         "replay",
         "--check-dst",
@@ -676,7 +675,7 @@ def test_replay_content_failed_copy_retry(
         failures=get_failures,
     )
 
-    caplog.set_level(logging.DEBUG, replay_module_name)
+    caplog.set_level(logging.DEBUG, "swh.objstorage.replayer.replay")
 
     result = invoke(
         "replay",
@@ -761,7 +760,7 @@ def test_replay_content_objnotfound(
         del objstorages["src"].state[objstorages["src"]._state_key(obj_id)]
         contents_deleted.add(format_obj_id(obj_id))
 
-    caplog.set_level(logging.DEBUG, replay_module_name)
+    caplog.set_level(logging.DEBUG, "swh.objstorage.replayer.replay")
 
     result = invoke(
         "replay",
