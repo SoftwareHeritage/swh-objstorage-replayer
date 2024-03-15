@@ -52,6 +52,15 @@ CONTENT_BYTES_METRIC = "swh_content_replayer_bytes"
 CONTENT_DURATION_METRIC = "swh_content_replayer_duration_seconds"
 
 
+class LengthMismatch(Exception):
+    def __init__(self, expected, received):
+        self.expected = expected
+        self.received = received
+
+    def __str__(self):
+        return f"Length mismatch: received {self.received} != expected {self.expected}"
+
+
 class HashMismatch(Exception):
     def __init__(self, expected, received):
         self.mismatched = {}
@@ -305,12 +314,15 @@ def put_object(objstorage: ObjStorageInterface, obj_id: CompositeObjId, obj: byt
 
 def copy_object(
     obj_id: CompositeObjId,
+    obj_len: int,
     src: ObjStorageInterface,
     dst: ObjStorageInterface,
     check_src_hashes: bool = False,
 ) -> int:
     obj = get_object(src, obj_id)
     if obj is not None:
+        if len(obj) != obj_len:
+            raise LengthMismatch(obj_len, len(obj))
         if check_src_hashes:
             check_hashes(obj, obj_id)
         put_object(dst, obj_id, obj)
@@ -429,11 +441,20 @@ class ContentReplayer:
         if decision is None:
             try:
                 copied_bytes = copy_object(
-                    obj_id, src=src, dst=dst, check_src_hashes=self.check_src_hashes
+                    obj_id,
+                    obj_len=obj["length"],
+                    src=src,
+                    dst=dst,
+                    check_src_hashes=self.check_src_hashes,
                 )
             except ObjNotFoundError:
                 logger_debug_obj_id("not found %(obj_id)s", {"obj_id": obj_id})
                 decision = "not_found"
+                if not self.check_dst and obj_in_objstorage(obj_id, dst):
+                    tags["status"] = "found_in_dst"
+            except LengthMismatch as exc:
+                logger.info("length mismatch %s", format_obj_id(obj_id), exc_info=exc)
+                decision = "length_mismatch"
                 if not self.check_dst and obj_in_objstorage(obj_id, dst):
                     tags["status"] = "found_in_dst"
             except HashMismatch as exc:
@@ -485,6 +506,7 @@ class ContentReplayer:
                 "copied",
                 "in_dst",
                 "hash_mismatch",
+                "length_mismatch",
             ],
             0,
         )

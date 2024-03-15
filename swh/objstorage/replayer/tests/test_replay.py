@@ -87,10 +87,12 @@ def test_replay_exclude(objstorages):
         "content": [
             {
                 **id1,
+                "length": 7,
                 "status": "visible",
             },
             {
                 **id2,
+                "length": 7,
                 "status": "visible",
             },
         ]

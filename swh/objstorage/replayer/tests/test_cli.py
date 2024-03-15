@@ -379,6 +379,59 @@ def test_replay_content_hash_mismatch(
 
 
 @_patch_objstorages(["src", "dst"])
+def test_replay_content_length_mismatch(
+    objstorages,
+    kafka_prefix: str,
+    kafka_consumer_group: str,
+    kafka_server: Tuple[Popen, int],
+):
+    """Check the content replayer in normal conditions
+
+    with hash mismatches
+    """
+
+    mangled = set()
+    unmangled = set()
+
+    def mangle_value(value):
+        if value["sha256"][0] > 128:
+            mangled.add(value["sha256"])
+            return {**value, "length": value["length"] + 1}
+        else:
+            unmangled.add(value["sha256"])
+            return value
+
+    contents = _fill_objstorage_and_kafka(
+        kafka_server, kafka_prefix, objstorages["src"], mangle_value=mangle_value
+    )
+
+    assert mangled
+    assert unmangled
+
+    result = invoke(
+        "replay",
+        "--stop-after-objects",
+        str(NUM_CONTENTS),
+        journal_client={
+            "cls": "kafka",
+            "brokers": kafka_server,
+            "group_id": kafka_consumer_group,
+            "prefix": kafka_prefix,
+        },
+    )
+    expected = r"Done.\n"
+    assert result.exit_code == 0, result.output
+    assert re.fullmatch(expected, result.output, re.MULTILINE), result.output
+
+    for obj_id, content in contents:
+        if obj_id["sha256"] in mangled:
+            assert obj_id not in objstorages["dst"], format_obj_id(obj_id)
+        else:
+            assert obj_id in objstorages["dst"], obj_id
+            assert objstorages["dst"].get(obj_id) == content
+
+
+@_patch_objstorages(["src", "dst"])
 def test_replay_content_exclude_by_size(
     objstorages,
     kafka_prefix: str,
