@@ -1,4 +1,4 @@
-pytest
+pytest >= 8.1
 pytest-redis
 swh.core[testing]
 types-pyyaml
