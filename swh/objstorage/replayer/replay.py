@@ -1,4 +1,4 @@
-# Copyright (C) 2019-2023 The Software Heritage developers
+# Copyright (C) 2019-2024 The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from humanize import naturaldelta, naturalsize
 import msgpack
-from sentry_sdk import capture_exception, push_scope
+import sentry_sdk
 
 from swh.objstorage.interface import (
     CompositeObjId,
@@ -60,6 +60,10 @@ def format_obj_id(obj_id: CompositeObjId) -> str:
             if hash
         )
     )
+
+
+def hex_obj_id(obj_id: CompositeObjId) -> Dict[str, str]:
+    return {algo: hash_to_hex(hash) for algo, hash in obj_id.items() if hash}
 
 
 def logger_debug_obj_id(msg, args, **kwargs):
@@ -160,10 +164,10 @@ def log_replay_error(retry_state: RetryCallState) -> None:
     assert isinstance(exc, ReplayError)
     assert retry_state.fn
 
-    with push_scope() as scope:
+    with sentry_sdk.push_scope() as scope:
         scope.set_tag("operation", retry_state.fn.__name__)
-        scope.set_extra("obj_id", exc.obj_id)
-        capture_exception(exc.exc)
+        scope.set_extra("obj_id", hex_obj_id(exc.obj_id))
+        sentry_sdk.capture_exception(exc.exc)
 
     error_context = {
         "obj_id": format_obj_id(exc.obj_id),

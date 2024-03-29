@@ -1,4 +1,4 @@
-# Copyright (C) 2022-2023  The Software Heritage developers
+# Copyright (C) 2022-2024  The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
@@ -150,8 +150,18 @@ def test_replay_content_with_transient_errors(
 
 @patch_objstorages(["src", "dst"])
 def test_replay_content_with_errors(
-    objstorages, kafka_server, kafka_prefix, kafka_consumer_group, monkeypatch
+    objstorages,
+    kafka_server,
+    kafka_prefix,
+    kafka_consumer_group,
+    monkeypatch,
+    mocker,
 ):
+    import sentry_sdk
+
+    sentry_sdk.init()
+    capture_event = mocker.spy(sentry_sdk.Hub.current.client, "capture_event")
+
     client, src_objstorage = prepare_test(
         kafka_server, kafka_prefix, kafka_consumer_group
     )
@@ -170,6 +180,7 @@ def test_replay_content_with_errors(
 
     # no object could be replicated
     assert dst_objstorage.state == {}
+    assert capture_event.mock_calls
 
     stats = [q.get_nowait() for i in range(q.qsize())]
     for obj in CONTENTS:
@@ -189,6 +200,13 @@ def test_replay_content_with_errors(
         assert get.get("start_time") > 0
         assert get.get("idle_for") > 0
         assert get.get("delay_since_first_attempt") > 0
+
+        # check hexadecimal hashes are available in sentry event extra data
+        hex_objid = {algo: hash.hex() for algo, hash in obj_id.items()}
+        assert any(
+            mock_call.kwargs["event"]["extra"].get("obj_id") == hex_objid
+            for mock_call in capture_event.mock_calls
+        )
 
 
 @patch_objstorages(["src", "dst"])
