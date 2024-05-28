@@ -13,7 +13,7 @@ from swh.model.model import Content
 from swh.objstorage import factory
 from swh.objstorage.exc import ObjNotFoundError
 from swh.objstorage.interface import CompositeObjId, ObjStorageInterface
-from swh.objstorage.multiplexer.filter.filter import ObjStorageFilter
+from swh.objstorage.objstorage import ObjStorage
 from swh.objstorage.replayer import replay
 from swh.objstorage.replayer.replay import copy_object  # needed for MonkeyPatch
 from swh.objstorage.replayer.replay import format_obj_id
@@ -26,7 +26,25 @@ CONTENTS = [Content.from_data(f"foo{i}".encode()) for i in range(10)] + [
 ]
 
 
-class FailingObjstorage(ObjStorageFilter):
+class ObjStorageProxyMixin(ObjStorage):
+    def __init__(self, storage):
+        super().__init__()
+        self.storage = storage
+
+    def delete(self, obj_id):
+        pass
+
+    def _state_key(self, obj_id):
+        return self.storage._state_key(obj_id)
+
+    def __contains__(self, *args, **kwargs):
+        return self.storage.__contains__(*args, **kwargs)
+
+    def __iter__(self):
+        return self.storage.__iter__()
+
+
+class FailingObjstorage(ObjStorageProxyMixin):
     def __init__(self, storage):
         super().__init__(storage)
         self.calls = defaultdict(lambda: 0)
@@ -44,16 +62,10 @@ class FailingObjstorage(ObjStorageFilter):
             return self.storage.add(content, obj_id, check_presence, *args, **kwargs)
         raise Exception("Nope")
 
-    def _state_key(self, obj_id):
-        return self.storage._state_key(obj_id)
 
-
-class NotFoundObjstorage(ObjStorageFilter):
+class NotFoundObjstorage(ObjStorageProxyMixin):
     def get(self, obj_id, *args, **kwargs):
         raise ObjNotFoundError(obj_id)
-
-    def _state_key(self, obj_id):
-        return self.storage._state_key(obj_id)
 
 
 def prepare_test(
