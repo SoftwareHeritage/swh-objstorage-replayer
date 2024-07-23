@@ -101,12 +101,14 @@ def copy_object_q(q):
     stats and puch them in a queue suitable for checking in a test session"""
 
     def wrap(obj_id, *args, **kwargs):
+        replay.get_object.statistics = {}
+        replay.put_object.statistics = {}
         try:
             ret = copy_object(obj_id, *args, **kwargs)
             return ret
         finally:
-            q.put(("get", obj_id, replay.get_object.retry.statistics.copy()))
-            q.put(("put", obj_id, replay.put_object.retry.statistics.copy()))
+            q.put(("get", obj_id, replay.get_object.statistics))
+            q.put(("put", obj_id, replay.put_object.statistics))
 
     return wrap
 

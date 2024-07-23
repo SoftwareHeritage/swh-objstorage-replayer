@@ -40,13 +40,9 @@ CLI_CONFIG = {
 }
 
 
-@pytest.fixture
-def monkeypatch_retry_sleep(monkeypatch):
-    from swh.objstorage.replayer.replay import get_object, obj_in_objstorage, put_object
-
-    monkeypatch.setattr(get_object.retry, "sleep", lambda x: None)
-    monkeypatch.setattr(put_object.retry, "sleep", lambda x: None)
-    monkeypatch.setattr(obj_in_objstorage.retry, "sleep", lambda x: None)
+@pytest.fixture(autouse=True)
+def mock_sleep(mocker):
+    return mocker.patch("time.sleep")
 
 
 def _patch_objstorages(names):
@@ -660,7 +656,6 @@ def test_replay_content_check_dst_retry(
     kafka_prefix: str,
     kafka_consumer_group: str,
     kafka_server: Tuple[Popen, int],
-    monkeypatch_retry_sleep,
     caplog,
     redis_proc,
     redisdb,
@@ -728,7 +723,6 @@ def test_replay_content_failed_copy_retry(
     kafka_consumer_group: str,
     kafka_server: Tuple[Popen, int],
     caplog,
-    monkeypatch_retry_sleep,
     redis_proc,
     redisdb,
 ):
