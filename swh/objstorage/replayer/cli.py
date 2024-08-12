@@ -200,11 +200,23 @@ def content_replay(
 
         replay.REPORTER = Redis(**replayer_cfg.get("error_reporter")).set
 
-    client = get_journal_client(
-        **journal_cfg,
-        stop_after_objects=stop_after_objects,
-        object_types=("content",),
+    # Massage the provided configuration
+    if "object_types" in journal_cfg:
+        journal_cfg.pop("object_types", None)
+
+    stop_after_objects = stop_after_objects or journal_cfg.pop(
+        "stop_after_objects", None
     )
+
+    # Fill-in the journal configuration out of the configuration and the cli
+    journal_config = {
+        **journal_cfg,
+        "stop_after_objects": stop_after_objects,
+        "object_types": ("content",),
+    }
+
+    client = get_journal_client(**journal_config)
+
     try:
         with ContentReplayer(
             src=objstorage_src_cfg,
