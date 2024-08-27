@@ -182,7 +182,7 @@ def content_replay(
 
         exclude_fns.append(exclude_by_size)
 
-    exclude_fn: Optional[Callable[[Dict[str, Any]], bool]] = None
+    exclude_fn: Optional[Callable[[Dict[str, Any]], bool]]
     if exclude_fns:
 
         def exclude_fn(obj: Dict[str, Any]) -> bool:
@@ -190,6 +190,9 @@ def content_replay(
                 if fn(obj):
                     return True
             return False
+
+    else:
+        exclude_fn = None
 
     journal_cfg = conf.pop("journal_client")
     replayer_cfg = conf.pop("replayer", {})
