@@ -305,9 +305,9 @@ def put_object(objstorage: ObjStorageInterface, obj_id: CompositeObjId, obj: byt
             objstorage.add(obj, obj_id, check_presence=False)
             logger_debug_obj_id("stored %(obj_id)s", {"obj_id": obj_id})
     except Exception as exc:
-        logger.error(
-            "putting %(obj_id)s failed: %(exc)r",
-            {"obj_id": format_obj_id(obj_id), "exc": exc},
+        logger_debug_obj_id(
+            "will retry putting %(obj_id)s, failed with: %(exc)r",
+            {"obj_id": obj_id, "exc": exc},
         )
         raise ReplayError(obj_id=obj_id, exc=exc) from None
 
