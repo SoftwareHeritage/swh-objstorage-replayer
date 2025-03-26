@@ -2,6 +2,7 @@ msgpack-types
 pytest >= 8.1
 pytest-redis
 swh.core[testing]
+swh.journal[pytest] >= 2.0.0
 types-confluent-kafka
 types-pyyaml
 types-redis
