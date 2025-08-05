@@ -1,4 +1,4 @@
-# Copyright (C) 2019-2023  The Software Heritage developers
+# Copyright (C) 2019-2025  The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
@@ -20,7 +20,7 @@ import pytest
 import yaml
 
 from swh.journal.serializers import key_to_kafka, value_to_kafka
-from swh.model.hashutil import MultiHash
+from swh.model.hashutil import DEFAULT_ALGORITHMS, MultiHash
 from swh.objstorage.backends.in_memory import InMemoryObjStorage
 from swh.objstorage.replayer.cli import objstorage_cli_group
 from swh.objstorage.replayer.replay import CONTENT_REPLAY_RETRIES, format_obj_id
@@ -112,7 +112,7 @@ def _fill_objstorage_and_kafka(
     for i in range(NUM_CONTENTS):
         content = b"\x00" * i + bytes([i])
         obj_id = (
-            MultiHash(["sha1", "sha1_git", "sha256", "blake2s256"], length=len(content))
+            MultiHash(DEFAULT_ALGORITHMS, length=len(content))
             .from_data(content)
             .digest()
         )
