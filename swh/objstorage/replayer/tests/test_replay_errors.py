@@ -1,4 +1,4 @@
-# Copyright (C) 2022-2024  The Software Heritage developers
+# Copyright (C) 2022-2025  The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
@@ -9,10 +9,11 @@ from typing import Tuple, cast
 
 from swh.journal.client import EofBehavior, JournalClient
 from swh.journal.writer import get_journal_writer
+from swh.model.hashutil import HashDict
 from swh.model.model import Content
 from swh.objstorage import factory
 from swh.objstorage.exc import ObjNotFoundError
-from swh.objstorage.interface import CompositeObjId, ObjStorageInterface
+from swh.objstorage.interface import ObjStorageInterface
 from swh.objstorage.objstorage import ObjStorage
 from swh.objstorage.replayer import replay
 from swh.objstorage.replayer.replay import copy_object  # needed for MonkeyPatch
@@ -83,7 +84,7 @@ def prepare_test(
 
     for content in CONTENTS:
         assert content.data is not None
-        src_objstorage.add(content.data, obj_id=cast(CompositeObjId, content.hashes()))
+        src_objstorage.add(content.data, obj_id=cast(HashDict, content.hashes()))
         writer.write_addition("content", content)
 
     replayer = JournalClient(

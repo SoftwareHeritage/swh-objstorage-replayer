@@ -1,4 +1,4 @@
-# Copyright (C) 2019-2024 The Software Heritage developers
+# Copyright (C) 2019-2025 The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
@@ -15,11 +15,8 @@ from humanize import naturaldelta, naturalsize
 import msgpack
 import sentry_sdk
 
-from swh.objstorage.interface import (
-    CompositeObjId,
-    ObjStorageInterface,
-    objid_from_dict,
-)
+from swh.model.hashutil import HashDict
+from swh.objstorage.interface import ObjStorageInterface, objid_from_dict
 
 try:
     from systemd.daemon import notify
@@ -88,7 +85,7 @@ class HashMismatch(Exception):
         )
 
 
-def format_obj_id(obj_id: CompositeObjId) -> str:
+def format_obj_id(obj_id: HashDict) -> str:
     return ";".join(
         (
             "%s:%s" % (algo, hash_to_hex(hash))
@@ -98,7 +95,7 @@ def format_obj_id(obj_id: CompositeObjId) -> str:
     )
 
 
-def hex_obj_id(obj_id: CompositeObjId) -> Dict[str, str]:
+def hex_obj_id(obj_id: HashDict) -> Dict[str, str]:
     return {algo: hash_to_hex(hash) for algo, hash in obj_id.items() if hash}
 
 
@@ -161,7 +158,7 @@ def is_hash_in_bytearray(hash_, array, nb_hashes, hash_size=SHA1_SIZE):
 class ReplayError(Exception):
     """An error occurred during the replay of an object"""
 
-    def __init__(self, *, obj_id: CompositeObjId, exc) -> None:
+    def __init__(self, *, obj_id: HashDict, exc) -> None:
         self.obj_id = obj_id
         self.exc = exc
 
@@ -193,7 +190,7 @@ def log_replay_retry(
 
 
 def log_replay_error(
-    obj_id: CompositeObjId, exc: Exception, operation: str, retries: int
+    obj_id: HashDict, exc: Exception, operation: str, retries: int
 ) -> None:
     with sentry_sdk.push_scope() as scope:
         scope.set_tag("operation", operation)
@@ -270,7 +267,7 @@ content_replay_retry = retry(
 
 
 @content_replay_retry
-def get_object(objstorage: ObjStorageInterface, obj_id: CompositeObjId) -> bytes:
+def get_object(objstorage: ObjStorageInterface, obj_id: HashDict) -> bytes:
     try:
         with statsd.timed(CONTENT_DURATION_METRIC, tags={"request": "get"}):
             obj = objstorage.get(obj_id)
@@ -286,7 +283,7 @@ def get_object(objstorage: ObjStorageInterface, obj_id: CompositeObjId) -> bytes
         raise ReplayError(obj_id=obj_id, exc=exc) from None
 
 
-def check_hashes(obj: bytes, obj_id: CompositeObjId):
+def check_hashes(obj: bytes, obj_id: HashDict):
     h = MultiHash.from_data(obj, hash_names=obj_id.keys())
     computed = h.digest()
 
@@ -297,7 +294,7 @@ def check_hashes(obj: bytes, obj_id: CompositeObjId):
 
 
 @content_replay_retry
-def put_object(objstorage: ObjStorageInterface, obj_id: CompositeObjId, obj: bytes):
+def put_object(objstorage: ObjStorageInterface, obj_id: HashDict, obj: bytes):
     try:
         logger_debug_obj_id("putting %(obj_id)s", {"obj_id": obj_id})
         with statsd.timed(CONTENT_DURATION_METRIC, tags={"request": "put"}):
@@ -313,7 +310,7 @@ def put_object(objstorage: ObjStorageInterface, obj_id: CompositeObjId, obj: byt
 
 
 def copy_object(
-    obj_id: CompositeObjId,
+    obj_id: HashDict,
     obj_len: int,
     src: ObjStorageInterface,
     dst: ObjStorageInterface,
@@ -332,7 +329,7 @@ def copy_object(
 
 
 @content_replay_retry
-def obj_in_objstorage(obj_id: CompositeObjId, dst: ObjStorageInterface) -> bool:
+def obj_in_objstorage(obj_id: HashDict, dst: ObjStorageInterface) -> bool:
     """Check if an object is already in an objstorage, tenaciously"""
     try:
         return obj_id in dst
@@ -357,7 +354,7 @@ class ContentReplayer:
 
         * `obj['status']` is `'visible'`
         * `exclude_fn(obj)` is `False` (if `exclude_fn` is provided)
-        * `CompositeObjId(**obj) not in dst` (if `check_dst` is True)
+        * `HashDict(**obj) not in dst` (if `check_dst` is True)
 
         Args:
             src: An object storage configuration dict (see
@@ -408,9 +405,7 @@ class ContentReplayer:
         obj_id = objid_from_dict(obj)
 
         if not obj_id:
-            raise ValueError(
-                "Object is missing the keys expected in CompositeObjId", obj
-            )
+            raise ValueError("Object is missing the keys expected in HashDict", obj)
 
         logger_debug_obj_id("Starting copy object %(obj_id)s", {"obj_id": obj_id})
         decision = None
