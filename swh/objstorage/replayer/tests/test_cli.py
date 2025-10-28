@@ -5,17 +5,17 @@
 
 from collections import Counter
 import copy
+import datetime
 import functools
 import logging
 import re
 from subprocess import Popen
 import tempfile
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import patch
 
 from click.testing import CliRunner
 from confluent_kafka import Producer
-import msgpack
 import pytest
 import yaml
 
@@ -38,6 +38,27 @@ CLI_CONFIG = {
         "name": "dst",
     },
 }
+
+
+# this is a copy of the same function from swh-storage/swh/storage/tests/test_replay.py
+# copied here because we don't want to depend on swh-storage here, but...
+def validate_keys(keys: List[bytes]) -> List[Tuple[str, str]]:
+    """Check error reporter keys (from redis)
+
+    Check they are correctly foratted and return them without the timestamp"""
+    # keys are 'iso-date/remaiming'
+    # check the timestamps for reported errors are in a reasonable range
+    n = datetime.datetime.now(datetime.UTC)
+    dt0 = datetime.timedelta(0)
+    dt1 = datetime.timedelta(minutes=1)
+    output = []
+    for k in (x.decode() for x in keys):
+        assert "/" in k
+        tstamp, rem = k.split("/", 1)
+        dt = n - datetime.datetime.fromisoformat(tstamp)
+        assert dt0 < dt < dt1
+        output.append((tstamp, rem))
+    return output
 
 
 @pytest.fixture(autouse=True)
@@ -812,25 +833,27 @@ def test_replay_content_failed_copy_retry(
             assert record.args["retries"] == CONTENT_REPLAY_RETRIES
             assert record.args["operation"] in ("get_object", "put_object")
             if record.args["operation"] == "get_object":
-                failed_get.add(record.args["obj_id"])
+                failed_get.add(format_obj_id(record.args["obj_id"]))
             else:
-                failed_put.add(record.args["obj_id"])
+                failed_put.add(format_obj_id(record.args["obj_id"]))
+    assert len(failed_put) == 1
+    assert len(failed_get) == 1
     assert (
         failed_put | failed_get == definitely_failed
     ), "Unexpected object copy failures; see captured log for details"
 
     # check failed objects are referenced in redis
-    assert set(redisdb.keys()) == {
-        f"blob:{objid}".encode() for objid in definitely_failed
-    }
+    assert len(validate_keys(redisdb.keys())) == 2
+
     # and have a consistent error report in redis
     for key in redisdb.keys():
-        report = msgpack.loads(redisdb[key])
+        report = yaml.safe_load(redisdb[key])
         assert report["operation"] in ("get_object", "put_object")
+        assert set(report["obj_id"].keys()) == DEFAULT_ALGORITHMS
         if report["operation"] == "get_object":
-            assert report["obj_id"] in failed_get
+            assert format_obj_id(report["obj_id"]) in failed_get
         else:
-            assert report["obj_id"] in failed_put
+            assert format_obj_id(report["obj_id"]) in failed_put
 
     # check valid object are in the dst objstorage, but
     # failed objects are not.

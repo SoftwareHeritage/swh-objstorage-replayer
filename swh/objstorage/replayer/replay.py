@@ -3,16 +3,17 @@
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
 
+import datetime
 import logging
 from queue import Empty, Queue
 from threading import Event, Thread
 from time import time
-from traceback import format_tb
+from traceback import format_exception, format_tb
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from humanize import naturaldelta, naturalsize
-import msgpack
 import sentry_sdk
+import yaml
 
 from swh.model.hashutil import HashDict
 from swh.objstorage.interface import ObjStorageInterface, objid_from_dict
@@ -46,6 +47,10 @@ CONTENT_OPERATIONS_METRIC = "swh_content_replayer_operations_total"
 CONTENT_RETRY_METRIC = "swh_content_replayer_retries_total"
 CONTENT_BYTES_METRIC = "swh_content_replayer_bytes"
 CONTENT_DURATION_METRIC = "swh_content_replayer_duration_seconds"
+
+
+def now():
+    return datetime.datetime.now(datetime.UTC)
 
 
 class LengthMismatch(Exception):
@@ -198,7 +203,7 @@ def log_replay_error(
     error_context = {
         "obj_id": format_obj_id(obj_id),
         "operation": operation,
-        "exc": str(exc),
+        "exc": format_exception(exc) if exc is not None else None,
         "retries": retries,
     }
 
@@ -210,9 +215,11 @@ def log_replay_error(
 
     # if we have a global error (redis) reporter
     if REPORTER is not None:
-        oid = f"blob:{format_obj_id(obj_id)}"
-        msg = msgpack.dumps(error_context)
-        REPORTER(oid, msg)
+        # keep the obj_id as a dict in the redis error report
+        error_context["obj_id"] = obj_id
+        key = f"{now().isoformat()}/blob"
+        msg = yaml.dump(error_context).encode()
+        REPORTER(key, msg)
 
 
 def retry_error_callback(retry_state: RetryCallState) -> None:
