@@ -83,7 +83,7 @@ Also note that you may increase the default concurrency within one replayer
 using the ``--concurrency`` command line option. This will use as many
 replication threads as given in argument, distributing the replication of
 objects **within the same kafka consumer** among these threads. This is
-typically useful when the replication of one object comes with non negligeable
+typically useful when the replication of one object comes with non negligible
 minimal latency (e.g. consuming from public cloud-based objstorages).
 
 
