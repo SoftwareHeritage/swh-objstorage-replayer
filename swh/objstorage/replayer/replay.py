@@ -1,11 +1,10 @@
-# Copyright (C) 2019-2025  The Software Heritage developers
+# Copyright (C) 2019-2026  The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
 
 import logging
 from queue import Empty, Queue
-import sys
 from threading import Event, Thread
 from time import time
 from traceback import format_tb
@@ -101,9 +100,8 @@ def hex_obj_id(obj_id: HashDict) -> Dict[str, str]:
 
 def logger_debug_obj_id(msg, args, **kwargs):
     if logger.isEnabledFor(logging.DEBUG):
-        if sys.version_info >= (3, 8):
-            # Ignore this helper in line/function calculation
-            kwargs = {**kwargs, "stacklevel": kwargs.get("stacklevel", 1) + 1}
+        # Ignore this helper in line/function calculation
+        kwargs = {**kwargs, "stacklevel": kwargs.get("stacklevel", 1) + 1}
         logger.debug(msg, {**args, "obj_id": format_obj_id(args["obj_id"])}, **kwargs)
 
 
