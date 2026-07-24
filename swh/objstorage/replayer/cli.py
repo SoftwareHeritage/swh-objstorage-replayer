@@ -1,4 +1,4 @@
-# Copyright (C) 2016-2023  The Software Heritage developers
+# Copyright (C) 2016-2026  The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
@@ -9,11 +9,6 @@ import logging
 from typing import Any, Callable, Dict, List, Optional
 
 import click
-
-try:
-    from systemd.daemon import notify
-except ImportError:
-    notify = None
 
 from swh.objstorage.cli import objstorage_cli_group
 
@@ -140,6 +135,11 @@ def content_replay(
 
     """
     import mmap
+
+    try:
+        from systemd.daemon import notify
+    except ImportError:
+        notify = None
 
     from swh.journal.client import get_journal_client
     from swh.model.model import SHA1_SIZE
