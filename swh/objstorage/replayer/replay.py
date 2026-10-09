@@ -231,7 +231,6 @@ def retry_error_callback(retry_state: RetryCallState) -> None:
     assert retry_state.fn
 
     operation = retry_state.fn.__name__
-
     log_replay_error(
         obj_id=exc.obj_id,
         exc=exc.exc,
@@ -245,10 +244,26 @@ def retry_error_callback(retry_state: RetryCallState) -> None:
 CONTENT_REPLAY_RETRIES = 3
 
 
+# required for testing purpose
+def retry_cb(retry_state: RetryCallState):
+    pass
+
+
+class retry_logger(retry_base):
+    """Tenacity retry logger used for testing purpose
+
+    It simply calls the 'retry_cb' function, which is to be moneypatched in
+    tests that need to sneak in there"""
+
+    def __call__(self, retry_state: RetryCallState) -> bool:
+        retry_cb(retry_state)
+        return False
+
+
 class retry_log_if_success(retry_base):
     """Log in statsd the number of attempts required to succeed"""
 
-    def __call__(self, retry_state: RetryCallState):
+    def __call__(self, retry_state: RetryCallState) -> bool:
         assert retry_state.outcome
         if not retry_state.outcome.failed:
             assert retry_state.fn
@@ -263,7 +278,9 @@ class retry_log_if_success(retry_base):
 
 
 content_replay_retry = retry(
-    retry=retry_if_exception_type(ReplayError) | retry_log_if_success(),
+    retry=retry_logger()
+    | retry_if_exception_type(ReplayError)
+    | retry_log_if_success(),
     stop=stop_after_attempt(CONTENT_REPLAY_RETRIES),
     wait=wait_random_exponential(multiplier=1, max=60),
     before_sleep=log_replay_retry,
