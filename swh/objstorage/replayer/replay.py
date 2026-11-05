@@ -503,7 +503,8 @@ class ContentReplayer:
             except Empty:
                 continue
             try:
-                decision, nbytes = self._copy_object(obj, src=src, dst=dst)
+                with sentry_sdk.start_transaction(name="Replay object", op="task"):
+                    decision, nbytes = self._copy_object(obj, src=src, dst=dst)
             except Exception as exc:
                 self.return_queue.put(("error", 0, exc))
             else:
