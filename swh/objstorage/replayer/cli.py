@@ -46,6 +46,21 @@ from swh.objstorage.cli import objstorage_cli_group
     help="Check objects in flight.",
 )
 @click.option(
+    "--min-batch-size",
+    default=None,
+    type=int,
+    help="""How many contents to retrieve and add at the same time.
+    Higher values improve load on some objstorage backends, at the expense
+    of latency.""",
+)
+@click.option(
+    "--max-batch-size",
+    default=None,
+    type=int,
+    help="""How many contents to retrieve and add at the same time.
+    Higher values improve throughput, at the expense of higher memory usage.""",
+)
+@click.option(
     "--concurrency",
     default=4,
     help=(
@@ -62,6 +77,8 @@ def content_replay(
     check_dst,
     check_src_hashes,
     concurrency,
+    min_batch_size,
+    max_batch_size,
 ) -> None:
     """Fill a destination Object Storage using a journal stream.
 
@@ -143,7 +160,12 @@ def content_replay(
 
     from swh.journal.client import get_journal_client
     from swh.model.model import SHA1_SIZE
-    from swh.objstorage.replayer.replay import ContentReplayer, is_hash_in_bytearray
+    from swh.objstorage.replayer.replay import (
+        DEFAULT_MAX_BATCH_SIZE,
+        DEFAULT_MIN_BATCH_SIZE,
+        ContentReplayer,
+        is_hash_in_bytearray,
+    )
 
     conf = ctx.obj["config"]
     if "objstorage" not in conf:
@@ -203,6 +225,11 @@ def content_replay(
 
         replay.REPORTER = Redis(**replayer_cfg.get("error_reporter")).set
 
+    if min_batch_size is None:
+        min_batch_size = DEFAULT_MIN_BATCH_SIZE
+    if max_batch_size is None:
+        max_batch_size = DEFAULT_MAX_BATCH_SIZE
+
     client = get_journal_client(
         **journal_cfg,
         stop_after_objects=stop_after_objects,
@@ -216,6 +243,8 @@ def content_replay(
             check_dst=check_dst,
             check_src_hashes=check_src_hashes,
             concurrency=concurrency,
+            min_batch_size=min_batch_size,
+            max_batch_size=max_batch_size,
         ) as replayer:
             if notify:
                 notify("READY=1")

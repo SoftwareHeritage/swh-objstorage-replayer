@@ -1,4 +1,4 @@
-# Copyright (C) 2019-2025  The Software Heritage developers
+# Copyright (C) 2019-2026  The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
@@ -11,7 +11,7 @@ import logging
 import re
 from subprocess import Popen
 import tempfile
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from unittest.mock import patch
 
 from click.testing import CliRunner
@@ -93,7 +93,14 @@ def invoke(*args, env=None, **kwargs):
     with tempfile.NamedTemporaryFile("a", suffix=".yml") as config_fd:
         yaml.dump(config, config_fd)
         config_fd.seek(0)
-        args = ["-C" + config_fd.name] + list(args)
+        args = [
+            "-C" + config_fd.name,
+            *args,
+            "--min-batch-size",
+            "1",
+            "--max-batch-size",
+            1,
+        ]
         return runner.invoke(
             objstorage_cli_group,
             args,
@@ -228,7 +235,8 @@ def test_replay_content_structured_log(
     for record in caplog.records:
         logtext = record.getMessage()
         if "stored" in logtext:
-            copied.add(record.args["obj_id"])
+            # 'obj_ids' here is a comma-separated string (with 1 item, so no comma)
+            copied.add(record.args["obj_ids"])
 
     assert (
         copied == expected_obj_ids
@@ -442,7 +450,9 @@ def test_replay_content_length_mismatch(
 
     for obj_id, content in contents:
         if obj_id["sha256"] in mangled:
-            assert obj_id not in objstorages["dst"], format_obj_id(obj_id)
+            assert (
+                obj_id not in objstorages["dst"]
+            ), f"Replayed mangled object: {format_obj_id(obj_id)}"
         else:
             assert obj_id in objstorages["dst"], obj_id
             assert objstorages["dst"].get(obj_id) == content
@@ -822,8 +832,8 @@ def test_replay_content_failed_copy_retry(
 
     # check the logs looks as expected
     copied = 0
-    failed_put = set()
-    failed_get = set()
+    failed_put: Set[str] = set()
+    failed_get: Set[str] = set()
     for record in caplog.records:
         logtext = record.getMessage()
         if "stored" in logtext:
@@ -831,13 +841,13 @@ def test_replay_content_failed_copy_retry(
         elif "Failed operation" in logtext:
             assert record.levelno == logging.ERROR
             assert record.args["retries"] == CONTENT_REPLAY_RETRIES
-            assert record.args["operation"] in ("get_object", "put_object")
-            if record.args["operation"] == "get_object":
-                failed_get.add(format_obj_id(record.args["obj_id"]))
+            assert record.args["operation"] in ("get_objects", "put_object")
+            if record.args["operation"] == "get_objects":
+                failed_get.update(map(format_obj_id, record.args["obj_ids"]))
             else:
-                failed_put.add(format_obj_id(record.args["obj_id"]))
-    assert len(failed_put) == 1
-    assert len(failed_get) == 1
+                failed_put.update(map(format_obj_id, record.args["obj_ids"]))
+    assert len(failed_put) == 1, (failed_put, failed_get)
+    assert len(failed_get) == 1, (failed_put, failed_get)
     assert (
         failed_put | failed_get == definitely_failed
     ), "Unexpected object copy failures; see captured log for details"
@@ -848,12 +858,13 @@ def test_replay_content_failed_copy_retry(
     # and have a consistent error report in redis
     for key in redisdb.keys():
         report = yaml.safe_load(redisdb[key])
-        assert report["operation"] in ("get_object", "put_object")
-        assert set(report["obj_id"].keys()) == DEFAULT_ALGORITHMS
-        if report["operation"] == "get_object":
-            assert format_obj_id(report["obj_id"]) in failed_get
+        assert report["operation"] in ("get_objects", "put_object")
+        (obj_id,) = report["obj_ids"]
+        assert set(obj_id.keys()) == DEFAULT_ALGORITHMS
+        if report["operation"] == "get_objects":
+            assert format_obj_id(obj_id) in failed_get
         else:
-            assert format_obj_id(report["obj_id"]) in failed_put
+            assert format_obj_id(obj_id) in failed_put
 
     # check valid object are in the dst objstorage, but
     # failed objects are not.

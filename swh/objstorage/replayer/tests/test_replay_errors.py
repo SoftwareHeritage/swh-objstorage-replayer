@@ -1,4 +1,4 @@
-# Copyright (C) 2022-2025  The Software Heritage developers
+# Copyright (C) 2022-2026  The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
@@ -16,8 +16,11 @@ from swh.objstorage.exc import ObjNotFoundError
 from swh.objstorage.interface import ObjStorageInterface
 from swh.objstorage.objstorage import ObjStorage
 from swh.objstorage.replayer import replay
-from swh.objstorage.replayer.replay import copy_object  # needed for MonkeyPatch
-from swh.objstorage.replayer.replay import format_obj_id
+from swh.objstorage.replayer.replay import (  # needed for MonkeyPatch
+    format_obj_id,
+    get_objects,
+    put_object,
+)
 from swh.objstorage.replayer.tests.test_cli import (
     _patch_objstorages as patch_objstorages,
 )
@@ -52,9 +55,15 @@ class FailingObjstorage(ObjStorageProxyMixin):
         self.rate = 3
 
     def get(self, obj_id, *args, **kwargs):
-        self.calls[format_obj_id(obj_id)] += 1
-        if (self.calls[format_obj_id(obj_id)] % self.rate) == 0:
-            return self.storage.get(obj_id, *args, **kwargs)
+        raise Exception(
+            "Called FailingObjstorage.get instead of FailingObjstorage.get_batch"
+        )
+
+    def get_batch(self, obj_ids, *args, **kwargs):
+        key = ", ".join(map(format_obj_id, obj_ids))
+        self.calls[key] += 1
+        if (self.calls[key] % self.rate) == 0:
+            return self.storage.get_batch(obj_ids, *args, **kwargs)
         raise Exception("Nope")
 
     def add(self, content, obj_id, check_presence=True, *args, **kwargs):
@@ -97,19 +106,32 @@ def prepare_test(
     return replayer, src_objstorage
 
 
-def copy_object_q(q):
-    """Wrap the original copy_object function to capture (thread-local) tenacity
-    stats and puch them in a queue suitable for checking in a test session"""
+def get_objects_q(q):
+    """Wrap the original ``get_objects`` function to capture (thread-local) tenacity
+    stats and push them in a queue suitable for checking in a test session"""
 
-    def wrap(obj_id, *args, **kwargs):
-        replay.get_object.statistics = {}
-        replay.put_object.statistics = {}
+    def wrap(obj_ids, *args, **kwargs):
+        replay.get_objects.statistics = {}
         try:
-            ret = copy_object(obj_id, *args, **kwargs)
+            ret = get_objects(obj_ids, *args, **kwargs)
             return ret
         finally:
-            q.put(("get", obj_id, replay.get_object.statistics))
-            q.put(("put", obj_id, replay.put_object.statistics))
+            q.put(("get", obj_ids, get_objects.statistics))
+
+    return wrap
+
+
+def put_object_q(q):
+    """Wrap the original ``put_object`` function to capture (thread-local) tenacity
+    stats and push them in a queue suitable for checking in a test session"""
+
+    def wrap(obj_id, *args, **kwargs):
+        put_object.statistics = {}
+        try:
+            ret = put_object(obj_id, *args, **kwargs)
+            return ret
+        finally:
+            q.put(("put", obj_id, put_object.statistics))
 
     return wrap
 
@@ -125,11 +147,14 @@ def test_replay_content_with_transient_errors(
     objstorages["src"] = FailingObjstorage(src_objstorage)
 
     q = Queue()
-    monkeypatch.setattr(replay, "copy_object", copy_object_q(q))
+    monkeypatch.setattr(replay, "get_objects", get_objects_q(q))
+    monkeypatch.setattr(replay, "put_object", put_object_q(q))
 
     with replay.ContentReplayer(
         src={"cls": "mocked", "name": "src"},
         dst={"cls": "mocked", "name": "dst"},
+        min_batch_size=1,
+        max_batch_size=1,
     ) as replayer:
         client.process(replayer.replay)
 
@@ -146,7 +171,7 @@ def test_replay_content_with_transient_errors(
         put = next(
             stat
             for (meth, oid, stat) in stats
-            if dst_objstorage._state_key(oid) == state_key and meth == "put"
+            if meth == "put" and dst_objstorage._state_key(oid) == state_key
         )
         assert put.get("attempt_number") == 1
         assert put.get("start_time") > 0
@@ -154,8 +179,8 @@ def test_replay_content_with_transient_errors(
 
         get = next(
             stat
-            for (meth, oid, stat) in stats
-            if dst_objstorage._state_key(oid) == state_key and meth == "get"
+            for (meth, oids, stat) in stats
+            if meth == "get" and dst_objstorage._state_key(oids[0]) == state_key
         )
         assert get.get("attempt_number") == 3
         assert get.get("start_time") > 0
@@ -184,12 +209,15 @@ def test_replay_content_with_errors(
     objstorages["src"] = FailingObjstorage(src_objstorage)
 
     q = Queue()
-    monkeypatch.setattr(replay, "copy_object", copy_object_q(q))
-    monkeypatch.setattr(replay.get_object.retry.stop, "max_attempt_number", 2)
+    monkeypatch.setattr(replay, "get_objects", get_objects_q(q))
+    monkeypatch.setattr(replay, "put_object", put_object_q(q))
+    monkeypatch.setattr(get_objects.retry.stop, "max_attempt_number", 2)
 
     with replay.ContentReplayer(
         src={"cls": "mocked", "name": "src"},
         dst={"cls": "mocked", "name": "dst"},
+        min_batch_size=1,
+        max_batch_size=1,
     ) as replayer:
         client.process(replayer.replay)
 
@@ -198,18 +226,18 @@ def test_replay_content_with_errors(
     assert capture_event.mock_calls
 
     stats = [q.get_nowait() for i in range(q.qsize())]
+    assert [
+        stat for (meth, oid, stat) in stats if meth == "put"
+    ] == [], "put_object was called"
+
     for obj in CONTENTS:
         if obj.status != "visible":
             continue
 
         obj_id = obj.hashes()
-        put = next(
-            stat for (meth, oid, stat) in stats if oid == obj_id and meth == "put"
-        )
-        assert put == {}
 
         get = next(
-            stat for (meth, oid, stat) in stats if oid == obj_id and meth == "get"
+            stat for (meth, oids, stat) in stats if meth == "get" and oids == [obj_id]
         )
         assert get.get("attempt_number") == 2
         assert get.get("start_time") > 0
@@ -219,9 +247,11 @@ def test_replay_content_with_errors(
         # check hexadecimal hashes are available in sentry event extra data
         hex_objid = {algo: hash.hex() for algo, hash in obj_id.items()}
         assert any(
-            mock_call.kwargs["event"]["extra"].get("obj_id") == hex_objid
+            mock_call.kwargs["event"]["extra"].get("obj_ids") == [hex_objid]
             for mock_call in capture_event.mock_calls
-        )
+        ), [
+            mock_call.kwargs["event"]["extra"] for mock_call in capture_event.mock_calls
+        ]
 
 
 @patch_objstorages(["src", "dst"])
@@ -235,30 +265,33 @@ def test_replay_content_not_found(
     objstorages["src"] = NotFoundObjstorage(src_objstorage)
 
     q = Queue()
-    monkeypatch.setattr(replay, "copy_object", copy_object_q(q))
+    monkeypatch.setattr(replay, "get_objects", get_objects_q(q))
+    monkeypatch.setattr(replay, "put_object", put_object_q(q))
 
     with replay.ContentReplayer(
         src={"cls": "mocked", "name": "src"},
         dst={"cls": "mocked", "name": "dst"},
+        min_batch_size=1,
+        max_batch_size=1,
     ) as replayer:
         client.process(replayer.replay)
 
-    # no object could be replicated
-    assert dst_objstorage.state == {}
+    assert dst_objstorage.state == {}, "some objects were replicated"
 
     stats = [q.get_nowait() for i in range(q.qsize())]
+
+    assert [
+        stat for (meth, oid, stat) in stats if meth == "put"
+    ] == [], "put_object was called"
+
     for obj in CONTENTS:
         if obj.status != "visible":
             continue
 
         obj_id = obj.hashes()
-        put = next(
-            stat for (meth, oid, stat) in stats if oid == obj_id and meth == "put"
-        )
-        assert put == {}
 
         get = next(
-            stat for (meth, oid, stat) in stats if oid == obj_id and meth == "get"
+            stat for (meth, oids, stat) in stats if meth == "get" and oids == [obj_id]
         )
         # ObjectNotFound should not be retried several times...
         assert get.get("attempt_number") == 1
@@ -277,11 +310,14 @@ def test_replay_content_with_transient_add_errors(
     dst_objstorage = objstorages["dst"]
 
     q = Queue()
-    monkeypatch.setattr(replay, "copy_object", copy_object_q(q))
+    monkeypatch.setattr(replay, "get_objects", get_objects_q(q))
+    monkeypatch.setattr(replay, "put_object", put_object_q(q))
 
     with replay.ContentReplayer(
         src={"cls": "mocked", "name": "src"},
         dst={"cls": "mocked", "name": "dst"},
+        min_batch_size=1,
+        max_batch_size=1,
     ) as replayer:
         client.process(replayer.replay)
 
@@ -298,7 +334,7 @@ def test_replay_content_with_transient_add_errors(
         put = next(
             stat
             for (meth, oid, stat) in stats
-            if dst_objstorage._state_key(oid) == state_key and meth == "put"
+            if meth == "put" and dst_objstorage._state_key(oid) == state_key
         )
         assert put.get("attempt_number") == 3
         assert put.get("start_time") > 0
@@ -307,8 +343,8 @@ def test_replay_content_with_transient_add_errors(
 
         get = next(
             stat
-            for (meth, oid, stat) in stats
-            if dst_objstorage._state_key(oid) == state_key and meth == "get"
+            for (meth, oids, stat) in stats
+            if meth == "get" and dst_objstorage._state_key(oids[0]) == state_key
         )
         assert get.get("attempt_number") == 1
         assert get.get("start_time") > 0
@@ -326,12 +362,15 @@ def test_replay_content_with_add_errors(
     dst_objstorage = objstorages["dst"]
 
     q = Queue()
-    monkeypatch.setattr(replay, "copy_object", copy_object_q(q))
-    monkeypatch.setattr(replay.get_object.retry.stop, "max_attempt_number", 2)
+    monkeypatch.setattr(replay, "get_objects", get_objects_q(q))
+    monkeypatch.setattr(replay, "put_object", put_object_q(q))
+    monkeypatch.setattr(get_objects.retry.stop, "max_attempt_number", 2)
 
     with replay.ContentReplayer(
         src={"cls": "mocked", "name": "src"},
         dst={"cls": "mocked", "name": "dst"},
+        min_batch_size=1,
+        max_batch_size=1,
     ) as replayer:
         client.process(replayer.replay)
 
@@ -345,7 +384,7 @@ def test_replay_content_with_add_errors(
 
         obj_id = obj.hashes()
         put = next(
-            stat for (meth, oid, stat) in stats if oid == obj_id and meth == "put"
+            stat for (meth, oid, stat) in stats if meth == "put" and oid == obj_id
         )
         assert put.get("attempt_number") == 2
         assert put.get("start_time") > 0
@@ -353,7 +392,7 @@ def test_replay_content_with_add_errors(
         assert put.get("delay_since_first_attempt") > 0
 
         get = next(
-            stat for (meth, oid, stat) in stats if oid == obj_id and meth == "get"
+            stat for (meth, oids, stat) in stats if meth == "get" and oids == [obj_id]
         )
         assert get.get("attempt_number") == 1
         assert get.get("start_time") > 0

@@ -1,4 +1,4 @@
-# Copyright (C) 2021-2023  The Software Heritage developers
+# Copyright (C) 2021-2026  The Software Heritage developers
 # See the AUTHORS file at the top-level directory of this distribution
 # License: GNU General Public License version 3, or any later version
 # See top-level LICENSE file for more information
@@ -74,6 +74,8 @@ def test_replay_statsd(
         src={"cls": "mocked", "name": "src"},
         dst={"cls": "mocked", "name": "dst"},
         exclude_fn=exclude_fn,
+        min_batch_size=1,
+        max_batch_size=1,
     ) as replayer:
         client.process(replayer.replay)
 
@@ -84,9 +86,9 @@ def test_replay_statsd(
     expected_reports = {
         # 4 because 2 for the copied objects + 2 for the in_dst ones
         f"^{prefix}_retries_total:1[|]c[|]#attempt:1,operation:obj_in_objstorage$": 4,
-        f"^{prefix}_retries_total:1[|]c[|]#attempt:1,operation:get_object$": 2,
+        f"^{prefix}_retries_total:1[|]c[|]#attempt:1,operation:get_objects$": 2,
         f"^{prefix}_retries_total:1[|]c[|]#attempt:1,operation:put_object$": 2,
-        f"^{prefix}_duration_seconds:[0-9]+[.][0-9]+[|]ms[|]#request:get$": 2,
+        f"^{prefix}_duration_seconds:[0-9]+[.][0-9]+[|]ms[|]#request:get_batch$": 2,
         f"^{prefix}_duration_seconds:[0-9]+[.][0-9]+[|]ms[|]#request:put$": 2,
         f"^{prefix}_bytes:4[|]c$": 2,
     }
