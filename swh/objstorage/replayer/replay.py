@@ -165,12 +165,7 @@ def is_hash_in_bytearray(hash_, array, nb_hashes, hash_size=SHA1_SIZE):
 class ReplayError(Exception):
     """An error occurred during the replay of an object"""
 
-    def __init__(
-        self,
-        *,
-        obj_ids: List[HashDict],
-        exc,
-    ) -> None:
+    def __init__(self, *, obj_ids: List[HashDict], exc) -> None:
         self.obj_ids = obj_ids
         self.exc = exc
 
@@ -543,16 +538,6 @@ class ContentReplayer:
             yield decision, copied_bytes
 
     def _worker(self):
-        """
-        return self._worker_inner()
-        """
-        try:
-            return self._worker_inner()
-        except Exception:
-            logger.exception("Exception in replayer thread:")
-            raise
-
-    def _worker_inner(self):
         src = factory.get_objstorage(**self.src_cfg)
         dst = factory.get_objstorage(**self.dst_cfg)
         while not self.stop_event.is_set():
