@@ -245,7 +245,6 @@ def retry_error_callback(retry_state: RetryCallState) -> None:
     assert retry_state.fn
 
     operation = retry_state.fn.__name__
-
     log_replay_error(
         obj_ids=exc.obj_ids,
         exc=exc.exc,
@@ -259,10 +258,26 @@ def retry_error_callback(retry_state: RetryCallState) -> None:
 CONTENT_REPLAY_RETRIES = 3
 
 
+# required for testing purpose
+def retry_cb(retry_state: RetryCallState):
+    pass
+
+
+class retry_logger(retry_base):
+    """Tenacity retry logger used for testing purpose
+
+    It simply calls the 'retry_cb' function, which is to be moneypatched in
+    tests that need to sneak in there"""
+
+    def __call__(self, retry_state: RetryCallState) -> bool:
+        retry_cb(retry_state)
+        return False
+
+
 class retry_log_if_success(retry_base):
     """Log in statsd the number of attempts required to succeed"""
 
-    def __call__(self, retry_state: RetryCallState):
+    def __call__(self, retry_state: RetryCallState) -> bool:
         assert retry_state.outcome
         if not retry_state.outcome.failed:
             assert retry_state.fn
@@ -277,7 +292,9 @@ class retry_log_if_success(retry_base):
 
 
 content_replay_retry = retry(
-    retry=retry_if_exception_type(ReplayError) | retry_log_if_success(),
+    retry=retry_logger()
+    | retry_if_exception_type(ReplayError)
+    | retry_log_if_success(),
     stop=stop_after_attempt(CONTENT_REPLAY_RETRIES),
     wait=wait_random_exponential(multiplier=1, max=60),
     before_sleep=log_replay_retry,
@@ -287,8 +304,8 @@ content_replay_retry = retry(
 
 @content_replay_retry
 def get_objects(
-    obj_ids: List[HashDict],
     objstorage: ObjStorageInterface,
+    obj_ids: List[HashDict],
 ) -> Tuple[List[Tuple[HashDict, bytes]], List[HashDict]]:
     """Returns pairs of `(obj_id, content)` and the set of objects that were not found."""
     try:
@@ -317,7 +334,7 @@ def check_hashes(obj: bytes, obj_id: HashDict):
 
 
 @content_replay_retry
-def put_object(obj_id: HashDict, obj: bytes, objstorage: ObjStorageInterface):
+def put_object(objstorage: ObjStorageInterface, obj_id: HashDict, obj: bytes):
     try:
         logger_debug_obj_id("putting %(obj_ids)s", {"obj_ids": [obj_id]})
         with statsd.timed(CONTENT_DURATION_METRIC, tags={"request": "put"}):
@@ -467,7 +484,7 @@ class ContentReplayer:
             return
 
         try:
-            found_objs, missing_obj_ids = get_objects(obj_ids_to_copy, src)
+            found_objs, missing_obj_ids = get_objects(src, obj_ids_to_copy)
         except Exception as exc:
             logger.info("failed %s", format_obj_id(obj_id), exc_info=exc)
             tags["decision"] = decision = "failed"
@@ -501,7 +518,7 @@ class ContentReplayer:
 
                 if self.check_src_hashes:
                     check_hashes(content, obj_id)
-                put_object(obj_id, content, dst)
+                put_object(dst, obj_id, content)
             except LengthMismatch as exc:
                 logger.info("length mismatch %s", formatted_obj_id, exc_info=exc)
                 decision = "length_mismatch"
@@ -558,16 +575,17 @@ class ContentReplayer:
 
             if not objs:
                 continue
-            for result in self._copy_objects(objs, src=src, dst=dst):
-                try:
-                    decision, nbytes = result
-                except ValueError:
-                    assert isinstance(
-                        result, Exception
-                    ), f"{result!r} is neither a 2-tuple nor an exception"
-                    self.return_queue.put(("error", 0, result))
-                else:
-                    self.return_queue.put((decision, nbytes, None))
+            with sentry_sdk.start_transaction(name="Copy objects", op="task"):
+                for result in self._copy_objects(objs, src=src, dst=dst):
+                    try:
+                        decision, nbytes = result
+                    except ValueError:
+                        assert isinstance(
+                            result, Exception
+                        ), f"{result!r} is neither a 2-tuple nor an exception"
+                        self.return_queue.put(("error", 0, result))
+                    else:
+                        self.return_queue.put((decision, nbytes, None))
 
     def replay(
         self,
