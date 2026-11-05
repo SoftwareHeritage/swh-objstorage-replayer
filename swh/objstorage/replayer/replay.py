@@ -388,7 +388,6 @@ class ContentReplayer:
             check_src_hashes: Checks the object before sending it to the dst objstorage.
             concurrency: Number of worker threads doing the replication process
                 (retrieve, check, store).
-                Replicates in the main thread if 0.
             min_batch_size: How many contents to retrieve and add at the same time.
                 Higher values improve load on some objstorage backends, at the expense
                 of latency.
@@ -600,9 +599,6 @@ class ContentReplayer:
                 continue
             for obj in objects:
                 self.obj_queue.put(obj)
-                if not self.workers:
-                    # configured to replicate from the main thread
-                    self._worker()
                 nobjs += 1
 
         logger.debug("Waiting for the obj queue to be processed")
